@@ -586,7 +586,24 @@ class OuroborosAgent:
 
         self.llm = LLMClient()
         self.tools = ToolRegistry(repo_dir=env.repo_dir, drive_root=env.drive_root)
-        self.memory = Memory(drive_root=env.drive_root, repo_dir=env.repo_dir)
+        # Smart memory (PAPER_INTEGRATION_ANALYSIS 不足 2): opt-in via
+        # OUROBOROS_SMART_MEMORY; when off we stay on the plain FIFO Memory so
+        # the block store keeps its exact current behavior. SmartMemory shares
+        # the LLMClient; rule-first scoring keeps LLM spend on ambiguous blocks
+        # only, and every LLM failure degrades silently to the rule verdict.
+        from ouroboros.config import get_smart_memory_enabled
+
+        if get_smart_memory_enabled():
+            from ouroboros.memory_ext.smart_memory import SmartMemory
+
+            self.memory = SmartMemory(
+                drive_root=env.drive_root,
+                repo_dir=env.repo_dir,
+                llm_client=self.llm,
+                model=self.llm.default_model(),
+            )
+        else:
+            self.memory = Memory(drive_root=env.drive_root, repo_dir=env.repo_dir)
         self.memory.ensure_files()
         # Unified smart router (PAPER_INTEGRATION_ANALYSIS 不足 1 + 不足 8): one
         # task classification feeds both the round-one tool envelope and the

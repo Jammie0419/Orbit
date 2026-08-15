@@ -106,6 +106,8 @@ graph TD
 
 ### 融合方案：Unified Smart Router
 
+> **✅ 实现状态（2026-08-15）**：已实现于 `ouroboros/smart_router.py`，接入 `ouroboros/agent.py`、`ouroboros/tools/registry.py`、`ouroboros/tool_policy.py`，开关 `OUROBOROS_SMART_ROUTING`（默认关闭，opt-in）。一个任务分类器同时驱动工具信封收窄（round-one schema envelope）与技能 Top-K 推荐；分类支持 type hint / workspace / 中英文 description+text 关键词；自建技能（双来源校验）在同等相关度下平局优先；每轮路由决策写入 `state/routing_history.jsonl`。`get_schema_by_name` 保持不受过滤，`enable_tools` 逃生通道始终可用。自动化回归见 `tests/test_smart_router.py`（17 例），真实 LLM 冒烟脚本见 `scripts/live/routing/smart_router_live_smoke.py` / `_multi.py` / `_rounds.py`。
+
 **来源**：Self-Improvements Survey - Tool Dynamic Routing（扩展到技能系统）  
 **适配度**：⭐⭐⭐⭐⭐  
 **代码改动**：~500 行  
@@ -831,6 +833,10 @@ graph TD
 
 ### 融合方案：Smart Memory
 
+> **✅ 实现状态（2026-08-15）**：已实现于 `ouroboros/memory_ext/smart_memory.py`，接入 `ouroboros/agent.py`，开关 `OUROBOROS_SMART_MEMORY`（默认关闭，opt-in）。关闭时行为与原始 `Memory` 完全一致；开启后每 block 附带 `importance`/`tags` 字段，淘汰按重要性而非 FIFO，并提供 `search_by_tags` / `search_by_importance`。实现遵循真实 `Memory` 的锁 + 原子写 + journal 模式，下游 `consolidator` 等按 `ts`/`source`/`content` 键读取不受影响。自动化回归见 `tests/test_smart_memory.py`（17 例），真实 LLM 冒烟脚本见 `scripts/live/memory/smart_memory_live.py`。
+>
+> 与文档原案的差异（有意为之）：规则评分优先，仅当规则判定落在 0.4–0.6 模糊区间才调用 LLM 仲裁（文档原案无 LLM 触发条件，逐 block 全调 LLM）；短内容惩罚不作用于已命中高价值关键词的 block（避免"discovered a critical bug"这类短小高价值记忆被误降权）；LLM 失败一律静默降级为规则评分。
+
 **来源**：Self-Evolving Survey - A-MEM (Autonomous Memory Management)  
 **适配度**：⭐⭐⭐⭐  
 **代码改动**：~400 行
@@ -1075,6 +1081,8 @@ graph TD
 ```
 
 ### 融合方案：Harness Tree
+
+> **✅ 实现状态（2026-08-15）**：已实现于 `ouroboros/harness_tree.py` + 仓库根 `harness_configs/`（main + coding/research/knowledge/simple 四分支），接入 `ouroboros/agent.py`、`ouroboros/context.py`。每任务一次分类 → `HarnessTree.select_branch(task_type)` → 复用 SmartRouter 的 `route()`（`task_type`/`skill_preferences`/`branch`）→ 分支配置经 `ctx.harness_branch` 注入 system prompt 额外段 + memory 注入过滤。分支只调配置不重新分类、不持有工具集（工具引用 `smart_router.TOOL_SETS`，与路由不会漂移）；缺失分支兜底空 `main`。自动化回归见 `tests/test_harness_tree.py`（13 例）。
 
 **来源**：Adaptive Auto-Harness - Harness Tree  
 **适配度**：⭐⭐⭐⭐⭐  

@@ -225,6 +225,12 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # economy / decision-accuracy switch, not a capability gate. Default OFF
     # (opt-in) because it changes the round-one envelope.
     "OUROBOROS_SMART_ROUTING": "false",
+    # Smart memory (PAPER_INTEGRATION_ANALYSIS 不足 2): importance-based
+    # eviction + tag extraction + tag/importance search on top of the plain
+    # FIFO scratchpad block store. Default OFF (opt-in) because it may spend a
+    # small LLM budget on importance confirmation for rule-ambiguous blocks;
+    # disabled behaves exactly like the plain Memory.
+    "OUROBOROS_SMART_MEMORY": "false",
     # Agent-requested restarts drain running tasks first: while any RUNNING
     # task still heartbeats, the restart waits up to this many seconds before
     # proceeding fail-closed (0 = no drain, restart immediately).
@@ -949,6 +955,15 @@ def get_trust_native_seeded_skills() -> bool:
 def get_smart_routing_enabled() -> bool:
     """Whether the unified smart router narrows the round-one tool/skill envelope."""
     return _settings_flag_enabled("OUROBOROS_SMART_ROUTING")
+
+
+def get_smart_memory_enabled() -> bool:
+    """Whether smart memory (importance eviction + tag search) is active.
+
+    Default OFF (opt-in): it may spend a small LLM budget on importance
+    confirmation for rule-ambiguous blocks. Disabled == plain FIFO Memory.
+    """
+    return _settings_flag_enabled("OUROBOROS_SMART_MEMORY")
 
 
 def normalize_runtime_mode(value: Any) -> str:

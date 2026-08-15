@@ -1,4 +1,4 @@
-"""Real-LLM multi-task walkthrough: drives the real smart-router + harness wiring
+﻿"""Real-LLM multi-task walkthrough: drives the real smart-router + harness wiring
 against a real model (DeepSeek via the openai-compatible stack) for one task of
 each type.
 
@@ -10,7 +10,7 @@ each type.
     ``tests/test_smart_router.py`` and ``tests/test_harness_tree.py``.
 
     Run manually:
-        python scripts/smart_router_live_multi.py
+        python scripts/live/routing/smart_router_live_multi.py
     Requires ``DEEPSEEK_API_KEY`` in ``.env.gaia`` (or the env) and costs a
     small budget per task.
 
@@ -150,7 +150,7 @@ def main() -> None:
     os.environ["OUROBOROS_SMART_ROUTING"] = "true"
     os.environ["OUROBOROS_MODEL"] = "openai-compatible::deepseek-chat"
 
-    repo_dir = pathlib.Path(__file__).resolve().parents[1]
+    repo_dir = pathlib.Path(__file__).resolve().parents[3]
     drive_root = pathlib.Path(tempfile.mkdtemp()) / "drive"
     drive_root.mkdir()
 

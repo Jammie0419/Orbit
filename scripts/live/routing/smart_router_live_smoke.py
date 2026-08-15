@@ -1,4 +1,4 @@
-"""Real-LLM smoke: drives the real smart-router + harness wiring against a real
+﻿"""Real-LLM smoke: drives the real smart-router + harness wiring against a real
 model (DeepSeek via the openai-compatible stack).
 
 ⚠️ MANUAL OPERATOR SCRIPT — NOT a pytest test, and NOT part of CI.
@@ -9,7 +9,7 @@ model (DeepSeek via the openai-compatible stack).
 
     Run manually:
         $env:OUROBOROS_SMART_ROUTING="true"
-        python scripts/smart_router_live_smoke.py
+        python scripts/live/routing/smart_router_live_smoke.py
     Requires ``DEEPSEEK_API_KEY`` in ``.env.gaia`` (or the env) and costs a
     small budget.
 
@@ -50,7 +50,7 @@ def main() -> None:
     # Pin the routed model to the OpenAI-compatible DeepSeek lane.
     os.environ["OUROBOROS_MODEL"] = "openai-compatible::deepseek-chat"
 
-    repo_dir = pathlib.Path(__file__).resolve().parents[1]
+    repo_dir = pathlib.Path(__file__).resolve().parents[3]
     drive_root = pathlib.Path(tempfile.mkdtemp()) / "drive"
     drive_root.mkdir()
 
