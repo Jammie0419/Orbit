@@ -1,0 +1,8 @@
+{
+  "description": "Coding branch skill bias: boost dev/engineering skills by name or tag.",
+  "boost": {
+    "unix_computer_use": 0.2
+  },
+  "tags": ["code", "test", "build", "git", "python"],
+  "always": []
+}

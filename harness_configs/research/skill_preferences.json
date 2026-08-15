@@ -1,0 +1,8 @@
+{
+  "description": "Research branch skill bias: boost research/web skills.",
+  "boost": {
+    "unix_computer_use": 0.1
+  },
+  "tags": ["research", "web", "search", "data"],
+  "always": []
+}

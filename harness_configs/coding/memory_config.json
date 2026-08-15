@@ -1,0 +1,6 @@
+{
+  "description": "Coding branch: prefer identity/world (project context) over dialogue; scratchpad first.",
+  "priority": ["scratchpad", "identity", "environment profile", "dialogue"],
+  "exclude": [],
+  "max_sections": 4
+}

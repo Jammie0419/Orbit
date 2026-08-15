@@ -15,6 +15,38 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 log = logging.getLogger(__name__)
 
+from ouroboros.agent_startup_checks import (
+    inject_crash_report,
+    verify_restart,
+    verify_system_state,
+)
+from ouroboros.agent_task_pipeline import (
+    build_review_context,
+    emit_task_results,
+)
+from ouroboros.config import EFFORT_SCALE, resolve_effort
+from ouroboros.context import build_llm_messages
+from ouroboros.context_budget import CONTEXT_SOFT_CAP_TOKENS
+from ouroboros.contracts.task_constraint import normalize_task_constraint
+from ouroboros.contracts.task_contract import attach_task_contract
+from ouroboros.llm import LLMClient
+from ouroboros.loop import run_llm_loop
+from ouroboros.memory import Memory
+from ouroboros.outcomes import infra_failed_axes
+from ouroboros.subagents import (
+    SUBAGENT_RESOLUTION_FIELDS,
+    CapabilityDelta,
+    SubagentDispatch,
+    SubagentExecutorResolution,
+    SubagentLaneResolution,
+    capability_delta_disclosures,
+    envelope_from_task,
+    resolve_subagent_dispatch,
+)
+from ouroboros.task_results import STATUS_RUNNING, write_task_result
+from ouroboros.tools import ToolRegistry
+from ouroboros.tools.registry import ToolContext
+from ouroboros.usage_accounting import BudgetExceeded
 from ouroboros.utils import (
     append_jsonl,
     emit_log_event,
@@ -25,38 +57,6 @@ from ouroboros.utils import (
     truncate_for_log,
     utc_now_iso,
 )
-from ouroboros.usage_accounting import BudgetExceeded
-from ouroboros.llm import LLMClient
-from ouroboros.tools import ToolRegistry
-from ouroboros.tools.registry import ToolContext
-from ouroboros.memory import Memory
-from ouroboros.context import build_llm_messages
-from ouroboros.context_budget import CONTEXT_SOFT_CAP_TOKENS
-from ouroboros.loop import run_llm_loop
-from ouroboros.config import EFFORT_SCALE, resolve_effort
-from ouroboros.agent_startup_checks import (
-    inject_crash_report,
-    verify_restart,
-    verify_system_state,
-)
-from ouroboros.agent_task_pipeline import (
-    emit_task_results, build_review_context,
-)
-from ouroboros.task_results import STATUS_RUNNING, write_task_result
-from ouroboros.contracts.task_constraint import normalize_task_constraint
-from ouroboros.contracts.task_contract import attach_task_contract
-from ouroboros.outcomes import infra_failed_axes
-from ouroboros.subagents import (
-    CapabilityDelta,
-    SubagentExecutorResolution,
-    SubagentLaneResolution,
-    SUBAGENT_RESOLUTION_FIELDS,
-    SubagentDispatch,
-    capability_delta_disclosures,
-    envelope_from_task,
-    resolve_subagent_dispatch,
-)
-
 
 _worker_boot_logged = False
 _worker_boot_lock = threading.Lock()
@@ -597,6 +597,13 @@ class OuroborosAgent:
             drive_root=env.drive_root,
             tool_registry=self.tools,
         )
+        # Harness tree (PAPER_INTEGRATION_ANALYSIS 不足 3): task-type branch
+        # config (system prompt extra / memory injection / skill preferences)
+        # applied on top of smart routing. Config-driven; missing branches
+        # fall back to the empty `main` branch == plain smart routing.
+        from ouroboros.harness_tree import HarnessTree
+
+        self.harness_tree = HarnessTree(env.repo_path("harness_configs"))
 
         self._log_worker_boot_once()
 
@@ -1030,17 +1037,29 @@ class OuroborosAgent:
         # per-model concurrency semaphore (ouroboros/model_concurrency.py), not by routing.
         self.tools.set_context(ctx)
 
-        # Unified smart routing: classify the task ONCE, narrow the round-one
-        # tool envelope (when the owner enabled it) and hold the skill
-        # recommendations for the prompt block appended after message build.
-        # The classification + history record always run; only the envelope
-        # narrowing is gated by the OUROBOROS_SMART_ROUTING flag.
+        # Unified smart routing + harness tree: classify the task ONCE, narrow
+        # the round-one tool envelope (when the owner enabled it), apply the
+        # task-type harness branch (skill preferences + prompt/memory config)
+        # and hold the skill recommendations for the prompt block appended
+        # after message build. Classification + history always run; only the
+        # envelope narrowing is gated by the OUROBOROS_SMART_ROUTING flag.
         try:
+            task_type = self.smart_router.task_classifier.classify(task)
+            branch = self.harness_tree.select_branch(task_type)
             routing = self.smart_router.route(
                 task,
-                available=set(self.tools.available_tools()),
+                # Unfiltered availability: the round-one filter must never
+                # judge against ITSELF (a filtered view fed back into the next
+                # route shrinks the envelope task after task on one agent).
+                available=set(self.tools.available_tools_unfiltered()),
+                task_type=task_type,
+                skill_preferences=branch.skill_preferences,
+                branch=branch.name,
             )
             self.tools.set_router_filter(routing.tool_names if routing.enabled else None)
+            # The harness branch rides on the existing ToolContext: context.py
+            # applies its system-prompt extra and memory-injection config.
+            ctx.harness_branch = branch
         except Exception:
             log.warning(
                 "Smart routing failed; falling back to the full envelope",
@@ -1172,7 +1191,7 @@ class OuroborosAgent:
         """Run one task under the root/subtree monetary attribution scope."""
         # Hot-reload settings so UI changes affect the next task without restart.
         try:
-            from ouroboros.config import load_settings, apply_settings_to_env
+            from ouroboros.config import apply_settings_to_env, load_settings
             apply_settings_to_env(load_settings())
         except Exception:
             pass
@@ -1267,7 +1286,7 @@ class OuroborosAgent:
             elif task_type_str == "deep_self_review":
                 # Deep self-review bypasses the tool loop.
                 try:
-                    from ouroboros.deep_self_review import run_deep_self_review, is_review_available
+                    from ouroboros.deep_self_review import is_review_available, run_deep_self_review
                     self._emit_progress("Starting deep self-review... This may take several minutes.")
                     review_model = str(task.get("model") or "")
                     if not review_model:

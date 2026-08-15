@@ -93,6 +93,13 @@ MagicMock/
 # Anchored: only the repo-root dir, never nested legitimate logs/ folders.
 /logs/
 
+# Repo-root state/ is likewise NOT a runtime dir — runtime state (routing
+# history, skill markers, etc.) lives under <DATA_DIR>/state/. A repo-root
+# state/ only ever appears when a test/script runs with drive_root="."; it is
+# Ouroboros's own runtime junk and useless to a host project, so it must never
+# dirty the tree or enter a release. Anchored for the same reason as /logs/.
+/state/
+
 # Sprint-local convergence census pins (private SHAs; never tracked)
 .convergence-parents
 

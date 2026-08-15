@@ -32,13 +32,13 @@ from ouroboros.context_fit import (
     estimate_context_prompt_tokens as estimate_context_prompt_tokens,
 )
 from ouroboros.context_health import (
+    _STRAY_PROBE_CACHE as _STRAY_PROBE_CACHE,
+)
+from ouroboros.context_health import (
     _compute_cache_hit_rate as _compute_cache_hit_rate,
 )
 from ouroboros.context_health import (
     _iter_recent_jsonl as _iter_recent_jsonl,
-)
-from ouroboros.context_health import (
-    _STRAY_PROBE_CACHE as _STRAY_PROBE_CACHE,
 )
 from ouroboros.context_health import (
     _stray_server_note as _stray_server_note,
@@ -847,6 +847,50 @@ def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
     return sections
 
 
+def _apply_harness_memory_config(
+    sections: List[str],
+    memory_config: Any,
+) -> List[str]:
+    """Post-filter/order memory sections per the harness branch (不足 3).
+
+    Works on the rendered section strings, matching their ``## Header`` by a
+    stable keyword. An empty config (the ``main`` branch) passes through
+    untouched, so plain smart routing behaves exactly as before.
+    """
+    if memory_config is None:
+        return sections
+    try:
+        include = memory_config.include or None
+        exclude = set(memory_config.exclude or [])
+        priority = memory_config.priority or []
+        max_sections = memory_config.max_sections
+    except Exception:
+        return sections
+
+    def _key(sec: str) -> str:
+        low = sec.lower()
+        for name in ("scratchpad", "dialogue", "identity", "environment profile", "memory registry"):
+            if name in low:
+                return name
+        return ""
+
+    if include is not None:
+        sections = [s for s in sections if _key(s) in set(include)]
+    if exclude:
+        sections = [s for s in sections if _key(s) not in exclude]
+    if priority:
+        def _rank(sec: str) -> int:
+            key = _key(sec)
+            try:
+                return priority.index(key)
+            except ValueError:
+                return len(priority)
+        sections.sort(key=_rank)
+    if max_sections is not None and max_sections > 0:
+        sections = sections[:max_sections]
+    return sections
+
+
 def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -> str:
     if not entries:
         return ""
@@ -1174,6 +1218,18 @@ def _capture_context_core(
         env.repo_path("prompts/SYSTEM.md"),
         fallback="You are Ouroboros. Your base prompt could not be loaded."
     )
+    # Harness branch (PAPER 不足 3): append the task-type system-prompt extra
+    # ON TOP of the base SYSTEM.md — appended, never replacing, so base
+    # capabilities stay resident. The branch rides on the ToolContext selected
+    # by the smart router in agent.py.
+    harness_branch = getattr(ctx, "harness_branch", None) if ctx is not None else None
+    if harness_branch is not None:
+        _extra = getattr(harness_branch, "system_prompt_extra", "") or ""
+        if _extra.strip():
+            base_prompt = base_prompt.rstrip() + "\n\n" + _extra.strip()
+        _memory_config = getattr(harness_branch, "memory_config", None)
+    else:
+        _memory_config = None
     bible_md = safe_read(env.repo_path("BIBLE.md"))
     architecture_md = safe_read(env.repo_path("docs/ARCHITECTURE.md"))
     development_md = safe_read(env.repo_path("docs/DEVELOPMENT.md"))
@@ -1234,7 +1290,8 @@ def _capture_context_core(
         docs_need_development = _task_requires_development_context(task)
 
     semi_stable_parts = []
-    semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
+    semi_stable_parts.extend(_apply_harness_memory_config(
+        build_memory_sections(memory, partition="stable"), _memory_config))
 
     semi_stable_parts.extend(build_knowledge_sections(env, project_id=resolve_project_id(task)))
 
@@ -1256,7 +1313,8 @@ def _capture_context_core(
     dynamic_parts = []
     if health_section:
         dynamic_parts.append(health_section)
-    dynamic_parts.extend(build_memory_sections(memory, partition="volatile"))
+    dynamic_parts.extend(_apply_harness_memory_config(
+        build_memory_sections(memory, partition="volatile"), _memory_config))
 
     registry_digest = _build_registry_digest(env)
     if registry_digest:

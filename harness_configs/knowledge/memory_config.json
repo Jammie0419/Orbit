@@ -1,0 +1,6 @@
+{
+  "description": "Knowledge branch: registry + identity first (the index and the curating identity), scratchpad next.",
+  "priority": ["memory registry", "identity", "scratchpad"],
+  "exclude": ["dialogue"],
+  "max_sections": 3
+}

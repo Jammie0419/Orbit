@@ -1,0 +1,6 @@
+{
+  "description": "Research branch: dialogue + scratchpad working set first; identity/world are low value while researching.",
+  "priority": ["scratchpad", "dialogue", "environment profile"],
+  "exclude": ["identity"],
+  "max_sections": 3
+}

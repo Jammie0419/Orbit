@@ -1,0 +1,6 @@
+{
+  "description": "Simple branch: dialogue continuity only; drop heavy memory sections.",
+  "priority": ["dialogue"],
+  "exclude": ["environment profile", "memory registry"],
+  "max_sections": 1
+}

@@ -1,0 +1,6 @@
+{
+  "description": "Simple branch skill bias: no skill bias for trivial turns.",
+  "boost": {},
+  "tags": [],
+  "always": []
+}
