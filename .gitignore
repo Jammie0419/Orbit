@@ -114,3 +114,8 @@ MagicMock/
 # make_fixtures_v2.py; committing them would pin a snapshot the benchmark
 # deliberately does not measure, and leaving them untracked dirties the seed gate.
 devtools/benchmarks/editbench/fixtures_v2/
+
+# Paper analysis documents (local working docs, not tracked)
+/ARCHITECTURE.md
+/PAPER_INTEGRATION_ANALYSIS.md
+/PAPER_METHODOLOGY.md
