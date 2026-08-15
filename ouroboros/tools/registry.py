@@ -11,64 +11,9 @@ import pathlib
 import re
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from ouroboros.runtime_mode_policy import (
-    PROTECTED_RUNTIME_PATHS,
-    mode_allows_protected_write,
-    protected_paths_in,
-    protected_write_block_message,
-)
-from ouroboros.tool_capabilities import (
-    ACTING_SUBAGENT_MODE,
-    ACTING_SUBAGENT_TOOL_NAMES,
-    CORE_TOOL_NAMES,
-    LOCAL_READONLY_SUBAGENT_MODE,
-    LOCAL_READONLY_SUBAGENT_TOOL_NAMES,
-    META_TOOL_NAMES,
-)
-from ouroboros.shell_parse import (
-    is_absolute_path_text,
-    path_text_is_inside,
-    shell_argv,
-    shell_argv_with_path_tokens,
-    shell_command_string,
-    strip_leading_env_assignments,
-    sudo_noninteractive_violation,
-    unwrap_env_argv,
-)
-from ouroboros.tools.shell_guards import (
-    LIGHT_SHELL_WRITER_COMMANDS,
-    PROTECTED_RUNTIME_PATHS_LOWER,
-    interpreter_family,
-    light_shell_repo_mutation,
-    parse_porcelain_paths,
-    process_shell_guard_args,
-    shell_has_write_indicator,
-    runtime_data_guard_targets,
-    shell_writer_targets_protected,
-    workspace_executor_state_write_block,
-    writer_target_tokens,
-)
 from ouroboros.artifacts import task_artifact_dir_path, task_id_for_artifacts
-from ouroboros.protected_artifacts import shell_block_reason as protected_artifact_shell_block_reason
-from ouroboros.git_shell_policy import run_shell_git_block_reason, workspace_git_safety_violation
-from ouroboros.tool_access import (
-    binding_targets_system_repo,
-    build_resolved_resource_binding,
-    canonical_repo_relative_path,
-    is_external_workspace,
-    light_cognitive_or_root_redirect,
-    normalize_root,
-    normalize_root_relative,
-    resolve_shell_cwd,
-    shell_cwd_block_message,
-    UserFilesPathBlockedError,
-    workspace_mode_block_reason,
-)
-from ouroboros.python_interpreter import record_python_resolution, resolve_process_python
-from ouroboros.utils import safe_relpath
-from ouroboros.contracts.task_constraint import TaskConstraint, VALID_WRITE_SURFACES, normalize_task_constraint
 from ouroboros.contracts.skill_payload_policy import (
     SKILL_OWNER_STATE_FILENAMES,
     SKILL_OWNER_STATE_STEMS,
@@ -82,6 +27,61 @@ from ouroboros.contracts.skill_payload_policy import (
     resolve_skill_payload_target,
     synthesize_payload_constraint,
 )
+from ouroboros.contracts.task_constraint import VALID_WRITE_SURFACES, TaskConstraint, normalize_task_constraint
+from ouroboros.git_shell_policy import run_shell_git_block_reason, workspace_git_safety_violation
+from ouroboros.protected_artifacts import shell_block_reason as protected_artifact_shell_block_reason
+from ouroboros.python_interpreter import record_python_resolution, resolve_process_python
+from ouroboros.runtime_mode_policy import (
+    PROTECTED_RUNTIME_PATHS,
+    mode_allows_protected_write,
+    protected_paths_in,
+    protected_write_block_message,
+)
+from ouroboros.shell_parse import (
+    is_absolute_path_text,
+    path_text_is_inside,
+    shell_argv,
+    shell_argv_with_path_tokens,
+    shell_command_string,
+    strip_leading_env_assignments,
+    sudo_noninteractive_violation,
+    unwrap_env_argv,
+)
+from ouroboros.tool_access import (
+    UserFilesPathBlockedError,
+    binding_targets_system_repo,
+    build_resolved_resource_binding,
+    canonical_repo_relative_path,
+    is_external_workspace,
+    light_cognitive_or_root_redirect,
+    normalize_root,
+    normalize_root_relative,
+    resolve_shell_cwd,
+    shell_cwd_block_message,
+    workspace_mode_block_reason,
+)
+from ouroboros.tool_capabilities import (
+    ACTING_SUBAGENT_MODE,
+    ACTING_SUBAGENT_TOOL_NAMES,
+    CORE_TOOL_NAMES,
+    LOCAL_READONLY_SUBAGENT_MODE,
+    LOCAL_READONLY_SUBAGENT_TOOL_NAMES,
+    META_TOOL_NAMES,
+)
+from ouroboros.tools.shell_guards import (
+    LIGHT_SHELL_WRITER_COMMANDS,
+    PROTECTED_RUNTIME_PATHS_LOWER,
+    interpreter_family,
+    light_shell_repo_mutation,
+    parse_porcelain_paths,
+    process_shell_guard_args,
+    runtime_data_guard_targets,
+    shell_has_write_indicator,
+    shell_writer_targets_protected,
+    workspace_executor_state_write_block,
+    writer_target_tokens,
+)
+from ouroboros.utils import safe_relpath
 
 log = logging.getLogger(__name__)
 def _coerce_real_path(value: Any) -> pathlib.Path | None:
@@ -1361,6 +1361,9 @@ class ToolContext:
     pending_events: List[Dict[str, Any]] = field(default_factory=list)
     current_chat_id: Optional[int] = None
     current_task_type: Optional[str] = None
+    # Harness branch selected by the smart router (PAPER 不足 3): carries the
+    # task-type system-prompt extra / memory-injection config for context.py.
+    harness_branch: Any = None
     pending_restart_reason: Optional[str] = None
     last_push_succeeded: bool = False
     last_reviewed_commit_sha: str = ""
@@ -1479,6 +1482,12 @@ class ToolRegistry:
         self._entries: Dict[str, ToolEntry] = {}
         self._ctx = ToolContext(repo_dir=repo_dir, drive_root=drive_root)
         self._capability_omissions: List[Dict[str, Any]] = []
+        # Smart-router round-one narrowing (ouroboros/smart_router.py): a
+        # frozenset of names the round-one envelope is limited to, or None for
+        # the full envelope. Meta-tools are ALWAYS retained (the discovery
+        # escape hatch), and get_schema_by_name is deliberately NOT filtered so
+        # enable_tools can still activate anything the router did not pre-load.
+        self._router_filter: Optional[frozenset[str]] = None
         self._load_modules()
 
     _FROZEN_TOOL_MODULES = [
@@ -1500,6 +1509,7 @@ class ToolRegistry:
             module_names = self._FROZEN_TOOL_MODULES
         else:
             import pkgutil
+
             import ouroboros.tools as tools_pkg
             module_names = [
                 m for _, m, _ in pkgutil.iter_modules(tools_pkg.__path__)
@@ -1518,6 +1528,35 @@ class ToolRegistry:
 
     def set_context(self, ctx: ToolContext) -> None:
         self._ctx = ctx
+
+    def set_router_filter(self, names: Optional[Iterable[str]]) -> None:
+        """Narrow the round-one schema envelope to ``names`` (smart routing).
+
+        ``None`` (or an empty iterable) restores the full envelope. The meta
+        tools (``list_available_tools`` / ``enable_tools``) are always kept so
+        the discovery escape hatch survives any filter; names that are not
+        registered are dropped. The filter only narrows — it can never widen
+        beyond what subagent/contract/credential policy already allows.
+        """
+        if names is None:
+            self._router_filter = None
+            return
+        kept = {str(name).strip() for name in names if str(name or "").strip()}
+        if not kept:
+            self._router_filter = None
+            return
+        self._router_filter = frozenset(kept) | META_TOOL_NAMES
+
+    def router_hidden_tools(self) -> List[str]:
+        """Registered tools hidden from the round-one envelope by the router.
+
+        Empty when no router filter is active. These names remain fully
+        executable via ``enable_tools`` (see ``get_schema_by_name``).
+        """
+        if self._router_filter is None:
+            return []
+        hidden = [name for name in self._available_tool_names_unfiltered() if name not in self._router_filter]
+        return sorted(hidden)
 
     def register(self, entry: ToolEntry) -> None:
         """Register a new tool entry."""
@@ -1570,7 +1609,13 @@ class ToolRegistry:
             return ACTING_SUBAGENT_TOOL_NAMES
         return frozenset(set(self.available_tools()) | set(META_TOOL_NAMES))
 
-    def available_tools(self) -> List[str]:
+    def _available_tool_names_unfiltered(self) -> List[str]:
+        """Availability set BEFORE the smart-router filter is applied.
+
+        Shared by ``available_tools()`` (filtered) and ``router_hidden_tools()``
+        (which must judge against the unfiltered set or the filter would hide
+        itself: a hidden tool list computed from a filtered view is always empty).
+        """
         acting_subagent = self._is_acting_subagent()
         local_readonly_subagent = self._is_local_readonly_subagent()
         disabled = _disabled_tools(self._ctx)
@@ -1582,6 +1627,22 @@ class ToolRegistry:
             if not local_readonly_subagent or e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
             if not acting_subagent or e.name in ACTING_SUBAGENT_TOOL_NAMES
         ]
+
+    def available_tools(self) -> List[str]:
+        available = self._available_tool_names_unfiltered()
+        if self._router_filter is None:
+            return available
+        return [name for name in available if name in self._router_filter]
+
+    def available_tools_unfiltered(self) -> List[str]:
+        """Availability set BEFORE the smart-router round-one filter is applied.
+
+        Smart routing must judge availability against THIS set (not the already
+        filtered ``available_tools()``): feeding a filtered view back into a
+        second route shrinks the envelope on every task (the round-one filter
+        leaks across consecutive tasks on one agent).
+        """
+        return self._available_tool_names_unfiltered()
 
     def _schema_for_entry(self, entry: ToolEntry) -> Dict[str, Any]:
         schema = entry.schema
@@ -1664,6 +1725,7 @@ class ToolRegistry:
             if not local_readonly_subagent or entry.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
             if not acting_subagent or entry.name in ACTING_SUBAGENT_TOOL_NAMES
             if not ephemeral_turn or entry.name in _EPHEMERAL_ALLOWED_TOOLS  # CW3: default-deny allowlist
+            if self._router_filter is None or entry.name in self._router_filter  # smart routing: round-one narrowing
             for schema in self._schemas_for_entry(entry)
         ]
         if disabled_tools:
@@ -1686,8 +1748,12 @@ class ToolRegistry:
         else:
             try:
                 from ouroboros.extension_loader import (
-                    _tools as _ext_tools,
                     _lock as _ext_lock,
+                )
+                from ouroboros.extension_loader import (
+                    _tools as _ext_tools,
+                )
+                from ouroboros.extension_loader import (
                     is_extension_live as _ext_is_live,
                 )
                 meta = getattr(self._ctx, "task_metadata", {})
@@ -1718,7 +1784,8 @@ class ToolRegistry:
                 self._capability_omissions.append({"surface": "mcp", "reason": "resource_blocked", "resource": "network=false"})
             else:
                 try:
-                    from ouroboros.mcp_client import ensure_configured_from_settings as _mcp_ensure_configured, get_manager as _mcp_get_manager
+                    from ouroboros.mcp_client import ensure_configured_from_settings as _mcp_ensure_configured
+                    from ouroboros.mcp_client import get_manager as _mcp_get_manager
                     _mcp_ensure_configured(refresh=True)
                     _mgr = _mcp_get_manager()
                     mcp_schemas = [
@@ -1762,6 +1829,8 @@ class ToolRegistry:
                 continue
             if ephemeral_turn and e.name not in _EPHEMERAL_ALLOWED_TOOLS:
                 continue  # CW3: the core/initial envelope is allowlisted too, not just schemas(core_only=False)
+            if self._router_filter is not None and e.name not in self._router_filter:
+                continue  # smart routing: round-one narrowing
             if (
                 (local_readonly_subagent and e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES)
                 or (acting_subagent and e.name in ACTING_SUBAGENT_TOOL_NAMES)
@@ -1851,7 +1920,8 @@ class ToolRegistry:
                 self._capability_omissions.append({"surface": "extensions", "reason": "resource_blocked", "resource": "network=false"})
                 return None
             try:
-                from ouroboros.extension_loader import get_tool as _ext_get_tool, is_extension_live as _ext_is_live
+                from ouroboros.extension_loader import get_tool as _ext_get_tool
+                from ouroboros.extension_loader import is_extension_live as _ext_is_live
                 ext_tool = _ext_get_tool(name)
                 meta = getattr(self._ctx, "task_metadata", {})
                 capability_root = pathlib.Path((meta.get("budget_drive_root") if isinstance(meta, dict) else "") or getattr(self._ctx, "budget_drive_root", "") or getattr(self._ctx, "drive_root", "") or ".").resolve(strict=False)
@@ -1872,7 +1942,11 @@ class ToolRegistry:
         try:
             from ouroboros.mcp_client import (
                 ensure_configured_from_settings as _mcp_ensure_configured,
+            )
+            from ouroboros.mcp_client import (
                 get_manager as _mcp_get_manager,
+            )
+            from ouroboros.mcp_client import (
                 is_mcp_tool_name as _mcp_is_name,
             )
             _mcp_ensure_configured(refresh=False)
@@ -1919,7 +1993,11 @@ class ToolRegistry:
         try:
             from ouroboros.mcp_client import (
                 ensure_configured_from_settings as _mcp_ensure_configured,
+            )
+            from ouroboros.mcp_client import (
                 get_manager as _mcp_get_manager,
+            )
+            from ouroboros.mcp_client import (
                 is_mcp_tool_name as _mcp_is_name,
             )
             _mcp_ensure_configured(refresh=False)
@@ -3095,7 +3173,8 @@ class ToolRegistry:
             _ext_parse_name = None
         if entry is None and _ext_parse_name and _ext_parse_name(name):
             try:
-                from ouroboros.extension_loader import get_tool as _ext_get_tool, is_extension_live as _ext_is_live
+                from ouroboros.extension_loader import get_tool as _ext_get_tool
+                from ouroboros.extension_loader import is_extension_live as _ext_is_live
                 ext_tool = _ext_get_tool(name)
                 capability_root = pathlib.Path(((getattr(self._ctx, "task_metadata", {}) or {}).get("budget_drive_root") if isinstance(getattr(self._ctx, "task_metadata", {}), dict) else "") or getattr(self._ctx, "budget_drive_root", "") or getattr(self._ctx, "drive_root", "") or ".").resolve(strict=False)
                 if ext_tool and not _ext_is_live(str(ext_tool.get("skill") or ""), capability_root, repo_path=str(ext_tool.get("skills_repo_path") or "") or None):
@@ -3108,6 +3187,8 @@ class ToolRegistry:
             try:
                 from ouroboros.mcp_client import (
                     ensure_configured_from_settings as _mcp_ensure_configured,
+                )
+                from ouroboros.mcp_client import (
                     is_mcp_tool_name as _mcp_is_name,
                 )
                 _mcp_ensure_configured(refresh=False)

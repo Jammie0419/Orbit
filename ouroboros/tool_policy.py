@@ -27,6 +27,12 @@ class ToolSchemaProvider(Protocol):
     def schemas(self, core_only: bool = False) -> List[Dict[str, Any]]:
         ...
 
+    def router_hidden_tools(self) -> List[str]:
+        ...
+
+    def get_schema_by_name(self, name: str) -> Dict[str, Any]:
+        ...
+
 
 def initial_tool_schemas(registry: ToolSchemaProvider) -> List[Dict[str, Any]]:
     """Return the full capability envelope that should be present from round 1.
@@ -41,9 +47,30 @@ def initial_tool_schemas(registry: ToolSchemaProvider) -> List[Dict[str, Any]]:
 
 
 def list_non_core_tools(registry: ToolSchemaProvider) -> List[Dict[str, str]]:
-    """Return name+description for tools that require explicit enable_tools."""
+    """Return name+description for tools that require explicit enable_tools.
 
-    return []
+    With the smart router active, every tool the router did not pre-load into
+    the round-one envelope is advertised here so ``list_available_tools`` /
+    ``enable_tools`` remain an honest, complete escape hatch (the router only
+    narrows the initial envelope — it never removes a capability).
+    """
+
+    hidden = getattr(registry, "router_hidden_tools", None)
+    if hidden is None:
+        return []
+    names = hidden()
+    if not names:
+        return []
+    out: List[Dict[str, str]] = []
+    for name in names:
+        schema = registry.get_schema_by_name(name)
+        description = ""
+        if isinstance(schema, dict):
+            description = str(
+                (schema.get("function") or {}).get("description") or ""
+            )
+        out.append({"name": name, "description": description})
+    return out
 
 
 CAPABILITY_OMISSION_HEADER = "[CAPABILITY_OMISSION_MANIFEST]"

@@ -218,6 +218,13 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # zero-grant ones also auto-enable. Editing the payload still goes stale.
     # Owner opt-out: set to false to keep manual review for native seeds.
     "OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS": "true",
+    # Unified smart routing (PAPER_INTEGRATION_ANALYSIS 不足 1 + 不足 8): narrows
+    # the round-one tool schema envelope to the task type and injects a
+    # recommended-skills prompt block. HIDDEN tools stay one enable_tools call
+    # away (the discovery escape hatch is never removed), so this is a token
+    # economy / decision-accuracy switch, not a capability gate. Default OFF
+    # (opt-in) because it changes the round-one envelope.
+    "OUROBOROS_SMART_ROUTING": "false",
     # Agent-requested restarts drain running tasks first: while any RUNNING
     # task still heartbeats, the restart waits up to this many seconds before
     # proceeding fail-closed (0 = no drain, restart immediately).
@@ -937,6 +944,11 @@ def get_auto_grant_enabled() -> bool:
 def get_trust_native_seeded_skills() -> bool:
     """Whether launcher-seeded native skills get the hash-pinned trust verdict."""
     return _settings_flag_enabled("OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS")
+
+
+def get_smart_routing_enabled() -> bool:
+    """Whether the unified smart router narrows the round-one tool/skill envelope."""
+    return _settings_flag_enabled("OUROBOROS_SMART_ROUTING")
 
 
 def normalize_runtime_mode(value: Any) -> str:

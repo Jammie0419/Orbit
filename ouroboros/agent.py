@@ -588,6 +588,15 @@ class OuroborosAgent:
         self.tools = ToolRegistry(repo_dir=env.repo_dir, drive_root=env.drive_root)
         self.memory = Memory(drive_root=env.drive_root, repo_dir=env.repo_dir)
         self.memory.ensure_files()
+        # Unified smart router (PAPER_INTEGRATION_ANALYSIS 不足 1 + 不足 8): one
+        # task classification feeds both the round-one tool envelope and the
+        # recommended-skills prompt block. Opt-in via OUROBOROS_SMART_ROUTING.
+        from ouroboros.smart_router import SmartRouter
+
+        self.smart_router = SmartRouter(
+            drive_root=env.drive_root,
+            tool_registry=self.tools,
+        )
 
         self._log_worker_boot_once()
 
@@ -1021,6 +1030,25 @@ class OuroborosAgent:
         # per-model concurrency semaphore (ouroboros/model_concurrency.py), not by routing.
         self.tools.set_context(ctx)
 
+        # Unified smart routing: classify the task ONCE, narrow the round-one
+        # tool envelope (when the owner enabled it) and hold the skill
+        # recommendations for the prompt block appended after message build.
+        # The classification + history record always run; only the envelope
+        # narrowing is gated by the OUROBOROS_SMART_ROUTING flag.
+        try:
+            routing = self.smart_router.route(
+                task,
+                available=set(self.tools.available_tools()),
+            )
+            self.tools.set_router_filter(routing.tool_names if routing.enabled else None)
+        except Exception:
+            log.warning(
+                "Smart routing failed; falling back to the full envelope",
+                exc_info=True,
+            )
+            routing = None
+            self.tools.set_router_filter(None)
+
         dispatch, _preflight_amended = self._run_delegate_preflight(drive_logs, task, dispatch)
         if _preflight_amended:
             # F10 sync: the metadata projection + ToolContext model override
@@ -1063,6 +1091,14 @@ class OuroborosAgent:
             soft_cap_tokens=_soft_cap,
             ctx=ctx,
         )
+        # Smart-routing skill recommendation block (不足 8): a ranked Top-K of
+        # installed skills for THIS task type. Recommendation only — it never
+        # removes a capability, and it is appended before the capability-delta
+        # note so the delta block stays the last instruction-shaped message.
+        if routing is not None:
+            _skill_block = routing.skill_prompt_block()
+            if _skill_block:
+                messages.append({"role": "user", "content": _skill_block})
         # The second of the three places a reduction must reach (the durable record
         # above is the first, `[SUBTASK_OUTCOME]` the third). It is appended HERE,
         # after the context is built, because it is a fact about THIS dispatch —
