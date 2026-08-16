@@ -1,4 +1,4 @@
-﻿"""Real-LLM MULTI-ROUND session walkthrough: one agent, several real DeepSeek
+"""Real-LLM MULTI-ROUND session walkthrough: one agent, several real model calls
 conversations back-to-back with very different questions. Verifies the full
 routing chain stays correct across rounds (no filter leak, each round routed
 independently) AND that the model actually calls tools inside each round's
@@ -12,7 +12,7 @@ narrowed envelope.
 
     Run manually:
         python scripts/live/routing/smart_router_live_rounds.py
-    Requires ``DEEPSEEK_API_KEY`` in ``.env.gaia`` (or the env) and costs a
+    Requires ``OPENAI_COMPATIBLE_API_KEY`` in ``.env.gaia`` (or the env) and costs a
     small budget per round.
 """
 from __future__ import annotations
@@ -22,21 +22,9 @@ import pathlib
 import queue
 import tempfile
 
-import dotenv  # type: ignore
-
-
-def _load_key() -> str:
-    dotenv.load_dotenv(".env.gaia")
-    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-    if not key:
-        raise SystemExit("DEEPSEEK_API_KEY not found in .env.gaia")
-    return key
-
-
 def _make_env(repo_dir: pathlib.Path, drive_root: pathlib.Path):
     from ouroboros.agent import Env
     return Env(repo_dir=repo_dir, drive_root=drive_root)
-
 
 ROUNDS = [
     {
@@ -73,13 +61,20 @@ ROUNDS = [
     },
 ]
 
-
 def main() -> None:
-    key = _load_key()
-    os.environ["OPENAI_COMPATIBLE_API_KEY"] = key
-    os.environ["OPENAI_COMPATIBLE_BASE_URL"] = "https://api.deepseek.com"
+    from ouroboros.config import load_settings
+
+    settings = load_settings()
+    os.environ["OPENAI_COMPATIBLE_API_KEY"] = str(settings.get("OPENAI_COMPATIBLE_API_KEY") or "").strip()
+    os.environ["OPENAI_COMPATIBLE_BASE_URL"] = str(settings.get("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
+    os.environ["OUROBOROS_MODEL"] = str(settings.get("OUROBOROS_MODEL") or "").strip()
+    if not os.environ["OPENAI_COMPATIBLE_API_KEY"]:
+        raise SystemExit("OPENAI_COMPATIBLE_API_KEY not configured in settings.json; sync .env first")
+    for _k in ("OUROBOROS_REVIEW_MODELS", "OUROBOROS_SCOPE_REVIEW_MODEL",
+               "OUROBOROS_SCOPE_REVIEW_MODELS", "OUROBOROS_MODEL_DEEP_SELF_REVIEW"):
+        if str(settings.get(_k) or "").strip():
+            os.environ[_k] = str(settings.get(_k)).strip()
     os.environ["OUROBOROS_SMART_ROUTING"] = "true"
-    os.environ["OUROBOROS_MODEL"] = "openai-compatible::deepseek-chat"
 
     repo_dir = pathlib.Path(__file__).resolve().parents[3]
     drive_root = pathlib.Path(tempfile.mkdtemp()) / "drive"
@@ -132,7 +127,6 @@ def main() -> None:
         print(f"  {r['id']:18} branch={r['branch']:10} env={r['envelope']:3} "
               f"probe={'OK' if ok else 'FAIL'} calls={r['calls']}")
     print("\nRESULT:", "ALL ROUTES CORRECT ACROSS ROUNDS" if all_ok else "ROUTE FAILURE DETECTED")
-
 
 if __name__ == "__main__":
     main()

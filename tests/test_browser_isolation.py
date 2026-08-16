@@ -190,6 +190,7 @@ class TestBrowserModuleState:
         assert "analyze_screenshot" in result
         assert ctx.browser_state.last_screenshot_b64
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="directory symlink alias requires POSIX permission model (Apple Silicon cache bridge)")
     def test_aliases_arm64_browser_cache_for_missing_x64_binary(self, monkeypatch, tmp_path):
         monkeypatch.setattr(browser_mod.sys, "platform", "darwin", raising=False)
         root = tmp_path / "playwright" / "chromium_headless_shell-1208"
