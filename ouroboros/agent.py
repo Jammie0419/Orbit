@@ -26,7 +26,6 @@ from ouroboros.agent_task_pipeline import (
 )
 from ouroboros.config import EFFORT_SCALE, resolve_effort
 from ouroboros.context import build_llm_messages
-from ouroboros.context_budget import CONTEXT_SOFT_CAP_TOKENS
 from ouroboros.contracts.task_constraint import normalize_task_constraint
 from ouroboros.contracts.task_contract import attach_task_contract
 from ouroboros.llm import LLMClient
@@ -1034,6 +1033,9 @@ class OuroborosAgent:
         # references are not serialized state or a new routing authority.
         ctx.owner_message_admission_lock = self._owner_message_admission_lock
         ctx.owner_message_admission_agent = self
+        # The REAL attempt identity for attempt-scoped owner controls (hurry):
+        # task["_attempt"] — timeout_retry_from is NOT an attempt key.
+        ctx.task_attempt = task.get("_attempt")
         if self._event_queue is not None:
             # Optional runtime seam consumed by loop.py.  Unit/direct contexts
             # remain compatible, while production queued tasks establish the
@@ -1105,26 +1107,11 @@ class OuroborosAgent:
 
         self._emit_typing_start()
 
-        _use_local = os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1")
-        _soft_cap = CONTEXT_SOFT_CAP_TOKENS
-        if _use_local:
-            _local_ctx = int(os.environ.get("LOCAL_MODEL_CONTEXT_LENGTH", "0"))
-            if _local_ctx <= 0:
-                try:
-                    from ouroboros.local_model import get_manager
-                    _local_ctx = get_manager().get_context_length()
-                except Exception:
-                    _local_ctx = 0
-            if _local_ctx <= 0:
-                _local_ctx = 16384
-            _soft_cap = max(2048, _local_ctx // 2)
-
         messages, cap_info = build_llm_messages(
             env=self.env,
             memory=self.memory,
             task=task,
             review_context_builder=lambda: build_review_context(self.env),
-            soft_cap_tokens=_soft_cap,
             ctx=ctx,
         )
         # Smart-routing skill recommendation block (不足 8): a ranked Top-K of

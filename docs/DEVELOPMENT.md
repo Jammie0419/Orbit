@@ -18,6 +18,7 @@ prevents.
 ## Naming and boundaries
 
 - Code identifiers, comments, docstrings, and commit messages are English.
+- User-facing product UI strings (web UI labels, toasts, chat/receipt copy) are English as well.
 - Follow PEP 8: modules and variables use `snake_case`, classes use
   `PascalCase`, and constants use `UPPER_SNAKE_CASE`.
 - Name the observable responsibility and authority, not the implementation
@@ -315,18 +316,28 @@ reroute.
 
 P7 makes context fit a maintenance constraint, not a line-count aesthetic.
 
-- Python and first-party `web/**/*.js` modules target roughly 1000 lines. The
-  deterministic hard gate is 1600 lines for paths not listed in
-  `ouroboros/review.py::GRANDFATHERED_OVERSIZED_MODULES`; that code-owned set is
-  the debt SSOT. Vendored/minified assets and `web/tests/` are excluded.
+- Python modules everywhere (including `tests/` and `devtools/`) and first-party
+  `web/**/*.js` modules (including `web/tests/`) target roughly 1000 lines. The
+  deterministic hard gate is 1600 lines for exact repo-relative paths not listed
+  in `ouroboros/size_ratchet_manifest.py::GIANT_PATHS`; stale or newly oversized
+  entries fail. Vendored/minified assets are excluded. The same production
+  iterator drives smoke, health, census, and the 200,000-byte ratchet. Sources
+  decode as strict UTF-8 and normalize line endings to canonical POSIX LF before
+  line and UTF-8-byte counts, so checkout policy cannot change the inventory.
+- The exact-current 1001-1500-line band lives in `BAND_PATHS`. A new or
+  re-entered path requires a nonblank rationale. `BYTE_DEBT` stores exact counts
+  above 200,000 UTF-8 bytes and is shrink-only; regenerate both with
+  `scripts/regenerate_size_ratchet.py`.
 - Every non-grandfathered Python function or method fails the deterministic gate
   above 300 lines; exceptions live in
-  `ouroboros/review.py::GRANDFATHERED_OVERSIZED_FUNCTIONS`. Methods above 150
+  exact `(repo-relative path, lexical qualname)` keys in
+  `ouroboros/size_ratchet_manifest.py::FUNCTION_DEBT`. Methods above 150
   lines are a decomposition signal. JavaScript currently has only the module
   line-count gate.
 - Runtime Python function/method count is checked against
-  `ouroboros/review.py::MAX_TOTAL_FUNCTIONS`; tracked `devtools/` is outside
-  that runtime-health count but remains reviewable when touched.
+  `ouroboros/review.py::MAX_TOTAL_FUNCTIONS`; the function iterator preserves
+  the pre-v7 runtime scope (tests/devtools excluded) while module gates include
+  those trees.
 - More than eight parameters is a decomposition signal applied by BIBLE and
   reviewer checklist 2(c), not a deterministic size-test gate. Existing
   baseline debt is not retroactively a failing tree. Any advisory ratchet must
@@ -462,12 +473,17 @@ ARCHITECTURE.md is CLASS-TIERED (v6.61.0, an owner-approved governance
 evolution — quiz 19): the agent declares `plan_class`
 (`self_mod | external | creative | research`), and the host STRUCTURALLY
 escalates to `self_mod` whenever `files_to_touch` resolve under the system repo
-(a path fact, never keyword matching). `self_mod` plans keep the full inline
+(a path fact, never keyword matching). The classification-only exception is an
+exact path inside a non-native installed skill payload under the canonical data
+root; it remains the declared class and does not grant or alter write authority.
+`self_mod` plans keep the full inline
 ARCHITECTURE.md — unchanged from the historical contract. Non-self_mod plans
 (an external codebase, a creative deliverable, a research question) receive
 ARCHITECTURE.md as the LOSSLESS navigation map (`context_layout.
-generate_doc_nav_map`: every section + line range, full sections readable on
-demand) — their reviewers judge the plan against its own domain, not ~45K
+generate_doc_nav_map`: every H2-H4 heading + its inclusive complete-subtree
+line range, with parent rows intentionally overlapping descendants and
+`max_lines=B-A+1`; full sections remain readable on demand) — their reviewers
+judge the plan against its own domain, not ~45K
 tokens of self-body detail. Rationale: the full-pack requirement existed to
 protect SELF-modification reasoning; for non-self plans it actively hurt
 review quality (reviewers anchored on runtime internals irrelevant to the
@@ -485,10 +501,13 @@ external/creative/research scouts are steered to the plan's own domain
 internals.
 
 Planning has two distinct roots. Governance documents are always loaded from
-the system repository; planned snapshots and Atlas inventory always use
-`active_repo_dir_for(ctx)`. A workspace/subject mismatch, an unavailable root,
-or a `files_to_touch` path escaping that subject must fail loudly. Do not fall
-back to reviewing the Ouroboros repo for an external plan. Read-only scouts use
+the system repository; Git-backed planned snapshots and Atlas inventory use
+`active_repo_dir_for(ctx)`. Exact non-native installed-skill payload paths are
+the one data-plane exception: their first-class touched snapshots read the
+current bytes from the canonical data root and say explicitly that they are not
+Git HEAD snapshots. Any other `files_to_touch` path escaping the active subject,
+a workspace/subject mismatch, or an unavailable root must fail loudly. Do not
+fall back to reviewing the Ouroboros repo for an external plan. Read-only scouts use
 the existing worker pool with its generic `executor=auto` route (selected
 healthy harness first, existing loud native fallback) and persist full raw
 handoffs. Wait for every launched
@@ -539,26 +558,38 @@ The short-lived Swarm router admits one new root and transfers the intent; it
 never runs `plan_task`, steers an existing task, or publishes the work inline.
 
 **Context mode (Low / Max).** `OUROBOROS_CONTEXT_MODE` controls the Architecture projection in the agent's own context: Max keeps `ARCHITECTURE.md` full for every task class, while Low supplies its lossless navigation map. `DEVELOPMENT.md` is mode-independent and follows the active repository binding. It is full when the task targets Ouroboros's system repository, including self-body and evolution work and a project room with no external binding; a bound external workspace, auto-provisioned external project tree, subagent, or API/CLI/scheduled external surface receives a visible on-demand pointer. Explicit structured overrides remain authoritative. Tier-0 identity and constitutional context stays full in every mode.
-For ordinary Main calls, `context_fit.py` may render Max and Low from one
-immutable captured core and apply exact family+route calibration. Unknown
-routes try Max; there is no silent 200K assumption. Only a confirmed physical
-overflow may retry the same model once with a task-local Low projection, with
-forensic and owner-visible disclosure. This never changes the global context
-mode and never applies to P3 commit/scope review.
+For ordinary Main calls, `context_fit.py` renders Max and Low from one immutable
+captured core and measures the sealed transcript plus live schemas on one
+labelled density basis. Owner Low has an elastic 200K total-context economy
+target; the actual route window remains the physical capacity, so a target miss
+is non-terminal and may send best effort after one useful pass. Predicted Max
+pressure never swaps in Low documents. Only actual provider overflow may use a
+task-local Low projection, followed by at most one same-route call whose final
+context-bearing candidate is strictly smaller with the same response reserve.
+This never changes owner mode or P3 commit/scope review.
 
 ### Invariant: Compaction must earn its rewrite
 
-Emergency compaction separates necessity from utility. Total calibrated wire
-pressure, including system/context blocks and tool schemas, decides whether
-relief is needed; only the compactable transcript and its best reachable
-post-pass floor decide whether a pass can help. When too few eligible spans
-exist or that floor remains over the trigger, record durable disclosed
-hysteresis instead of repeatedly paying a summarizer and rewriting the prompt.
-The pass's own rewrite cannot satisfy the growth condition: genuine
-compactable-region growth or the bounded round interval must rearm it. Preserve
-the independent reactive provider-overflow retry. This prevents an unchanged
-irreducible frame from destroying cache reuse while still allowing later useful
-compaction.
+Context compaction is a deficit-requested materializer, not an independent
+threshold, timer, route, or retry policy. It first performs pure selection over
+completed atomic units: one assistant tool-call message plus all and only its
+contiguous matching results. User turns are hard boundaries; malformed,
+missing, delayed, duplicated, visually opaque, or corrupt-capsule units remain
+byte-identical. No eligible positive reclaim means no checkpoint, summarizer
+call, or transcript mutation.
+
+For a non-empty selection, persist the exact actor-visible checkpoint before
+calling the summarizer. Summary input covers complete stable hashed chunks with
+gap-free offsets; it never uses head excerpts, long-string markers, or hidden
+argument/result omissions. Only typed summarizer context overflow may split a
+source recursively. Missing leaf coverage keeps that whole atomic unit raw,
+while independently covered units may apply. A replacement publishes only
+after transcript/unit binding, complete coverage, checkpoint provenance, and a
+strictly smaller representation on the caller's ContextFit measurement basis
+are all proved. The bounded image proxy and density must match the requesting
+fit calculation; raw base64 byte count is not token reclaim. Capsules carry
+host-only generation, source-hash, part, checkpoint, and CAS-ref metadata so a
+later pass can recompact them without losing the original provenance union.
 
 ### Invariant: No silent truncation
 
@@ -573,7 +604,8 @@ If a core governance artifact cannot fit in the available context budget:
   scope/advisory review helpers) MUST be listed in
   `UNTRUNCATED_TOOL_RESULTS` or have an explicit per-tool limit; the default
   15KB transport cap is not acceptable for review verdicts.
-- A reference-doc **navigation map** (full sections one `read_file` away) and a
+- A reference-doc **navigation map** (H2-H4 inclusive complete-subtree ranges,
+  with parent rows overlapping descendants and full sections one `read_file` away) and a
   named on-demand pointer are visible, lossless representations — NOT silent
   truncation. The low context mode uses these; it never applies `[:N]` to a doc.
 - String bounding goes through the SSOT `utils.truncate_review_artifact`, never a
@@ -682,22 +714,51 @@ Architecture owns the dataflow; this section owns operator sequence. Finish all
 edits, run focused tests, run the advisory when useful, then freeze and review
 the exact candidate. Do not interleave edits with repeated review calls.
 
-### External PR readiness is not commit authorization
+### External PR review is not commit authorization
 
-`scripts/run_external_review.py --contributor` reviews a clean committed
-base-to-head proposal with target-base reviewer defaults and emits shareable
-evidence. It establishes readiness and exact base/head/diff facts; it does not
-authorize an operator to commit, push, merge, or publish. A proposal changing
-the review substrate cannot self-attest its own fast path. Maintainers choose
-the landing parent and release version, preserve authorship, and run the normal
-final exact-candidate gate. `CONTRIBUTING.md` owns the contribution procedure.
-Accordingly, a pull request into `ouroboros` leaves `VERSION`,
-`pyproject.toml`, the editable root version in `uv.lock`, `web/package.json`,
-`web/modules/api_types.js::GATEWAY_CONTRACT_VERSION`, the README badge, and
-the Architecture header byte-identical to its target. At integration,
+The authoring agent freezes the final committed base-to-head range and gives it
+to a separate agent context for read-only review. Any coding harness or provider
+may supply that independent context; same-conversation self-review does not.
+Unavailable review is recorded as `NOT_RUN`, never silently presented as clean.
+`CONTRIBUTING.md` owns the public procedure and evidence fields.
+
+`scripts/run_external_review.py --contributor` is an optional structured
+producer for the same evidence. It preserves and freezes the machine's
+configured `api_chat` and `agent_session` triad/scope rows, then binds each row
+to its dispatched prompt receipt and observed response receipt. The shareable
+packet records exact base/head/tree/diff hashes, route/model/profile facts,
+terminal settlement and capability-delta facts, telemetry limitations, and
+full redacted agent-session transcripts. Missing, tampered, drifted,
+unprovable, or contradictory identity/terminal receipts make the packet
+`INCOMPLETE`. Non-identity capability deltas remain explicit degradation
+evidence and do not override the production actor-status/quorum result. A
+proposal changing this review substrate still requires a trusted-target rerun.
+
+This evidence establishes readiness; it does not authorize commit, push, merge,
+or publication. Maintainers choose the landing parent and release version,
+preserve authorship, and run the normal final exact-candidate gate. Accordingly,
+a pull request into `ouroboros` leaves `VERSION`, `pyproject.toml`, the editable
+root version in `uv.lock`, `web/package.json`,
+`web/modules/api_types.js::GATEWAY_CONTRACT_VERSION`, the README badge and
+latest Version History row, the named direct-download links in README and both
+install pages, and the Architecture header byte-identical to its target. At
+integration,
 `ouroboros/tools/release_sync.py::sync_release_metadata()` projects the chosen
 version and `version_carrier_desyncs()` verifies those carriers; changelog prose
-remains a deliberate maintainer edit.
+remains a deliberate maintainer edit. The same projection owns the seven public
+installer filename templates and rewrites the named direct-download links in
+README, the source install page, and its generated Pages copy. Those links use
+the immutable exact tag (`/releases/download/v{VERSION}/...`), not
+`/releases/latest/download/...`: prereleases are excluded from GitHub's latest
+release and a versioned latest-link would therefore fail during an RC. Release
+notes are generated from the same templates only after the seven proof-bound
+assets have been assembled.
+
+The integration branch may therefore name installers that are not published
+yet. Public onboarding does not use that branch: the default README and legacy
+GitHub Pages source are `main` and `main:/docs`. Stable promotion advances
+`main` only after the release and all seven installers are public; if promotion
+does not happen, users stay on the previous working release.
 
 Hermetic preflight uses a disposable worktree, temporary data/settings/pycache,
 and scrubbed runtime/secret-class environment. Tests must rebind imported
@@ -721,8 +782,8 @@ Before every commit, verify the following:
 - [ ] **Tool** (`{verb}_{noun}`): thin LLM-callable wrapper. Validates input, formats output.
 
 #### Module Size & Complexity
-- [ ] Module stays near one context window (~1000 lines target; 1600 hard gate unless explicitly grandfathered debt)
-- [ ] No non-grandfathered Python function or method exceeds the 300-line hard gate (`GRANDFATHERED_OVERSIZED_FUNCTIONS` is the exception SSOT); methods above 150 lines trigger decomposition review
+- [ ] Module stays near one context window (~1000 lines target; exact-path 1600 hard-gate debt is checked in, stale entries fail, and new/re-entered 1001-1500 paths carry a rationale)
+- [ ] No non-grandfathered Python function or method exceeds the 300-line hard gate (`FUNCTION_DEBT` exact `(path, qualname)` keys are the exception SSOT); methods above 150 lines trigger decomposition review
 - [ ] Total Python function count stays under the current smoke hard gate (consult `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` for the active value; bump with a comment if a feature requires more headroom)
 - [ ] More than eight parameters is a decomposition signal; consider a typed context object, but do not claim a hard gate or mark existing baseline debt noncompliant
 - [ ] No gratuitous abstract layers (Bible P7)
@@ -773,7 +834,8 @@ Before every commit, verify the following:
 - Project-room promotion with no working folder and no `workspace="none"` opt-out idempotently provisions a standalone git repo through `ensure_project_workspace`, then runs the ordinary workspace admission checks. Never provision over a non-empty broken binding or an unreadable registry; those cases fail loudly. Binding affects tool profile, memory, lease, and preflight, not the Max-mode Architecture projection.
 - Keep policy denials separate from execution failures: `user_files_path_blocked`, `cwd_blocked`, and `artifact_output_undeclared` are non-failure outcomes, while failure to register an explicitly declared output remains `artifact_output_error`.
 - The DEFAULT (non-workspace) shell lane carries the SAME target-aware git policy in every runtime mode including light (Q4=A sandbox unwind): mutating git is blocked only when it targets the Ouroboros runtime (system repo / any data drive — bidirectional, casefold, symlink-resolved containment; `commit_reviewed` is the remedy for self-repo changes), read-only git works everywhere including at the system repo, `allowed_resources.network=false` still fences network git subcommands, and acting `self_worktree` children keep the strict no-commit policy. `git init`/`commit`/`push` in `~/projects`, `/tmp`, an attached project folder, or a host-minted coop tree is legitimate task work, not a violation.
-- `claude_code_edit` is RETIRED (D10, owner-approved migration, phase 6.4): the SDK edit gateway's job moved to the delegated coding path — a mutating subagent (`schedule_subagent`) whose nanny drives the session with `delegate_start`/`delegate_wait`/`delegate_answer`/`delegate_cancel`, on the owner's subscription when a harness route is configured. Compatibility is one-way and permanent: a saved task contract carrying `disabled_tools=["claude_code_edit"]` also withholds the successor `delegate_start` (registry `_disabled_tools`), and the frozen `GET /api/claude-code/status` + `POST /api/claude-code/install` endpoints stay — the Claude runtime still powers the api-route advisory review. Do not resurrect the tool name.
+- `claude_code_edit` is RETIRED (D10, owner-approved migration, phase 6.4): the SDK edit gateway's job moved to the delegated coding path — a mutating subagent (`schedule_subagent`) whose nanny drives the session with `delegate_start`/`delegate_wait`/`delegate_answer`/`delegate_cancel`, on the owner's subscription when a harness route is configured. The D10 migration shipped INCOMPLETE for one supported target class — the old gateway could edit an exact non-Git skill payload directly, while the successor knew only Git workspaces — and that class was RESTORED (owner option A, 2026-08-14): a top-level task selects the exact payload with `delegate_start(root="skill_payload", bucket=..., skill_name=...)`, the harness edits a private standalone Git snapshot, and the parent applies the captured diff explicitly under a whole-payload content-hash CAS, after which the existing skill review is stale. Compatibility is one-way and permanent: a saved task contract carrying `disabled_tools=["claude_code_edit"]` also withholds the successor `delegate_start` (registry `_disabled_tools`), and the frozen `GET /api/claude-code/status` + `POST /api/claude-code/install` endpoints stay — the Claude runtime still powers the api-route advisory review. Do not resurrect the tool name.
+- Successor parity rule (from the D10 postmortem): a tool may be called replaced, retired with a successor, or fully migrated only after a persistent golden test proves every previously supported user-visible target class through the successor to the final outcome. Deleted-test tombstones and disclosure prove intentional code removal, not successor parity. Dropping a target class requires an explicit owner decision naming the lost user outcome; approval to remove the old tool name or implementation is not that approval.
 - Do not recommend `runtime_data/uploads`, skill payloads, or owner state directories as generic artifact transport.
 
 #### Runtime Cleanup / Retention
@@ -1060,6 +1122,21 @@ Before every commit, verify the following:
   expired cache horizon only from the latest recorded applied `5m`/`1h` TTL;
   absent, bare `default`, or unknown TTL evidence stays silent, and no surface
   predicts the next send's token rewrite.
+- Stop policy and owner hurry (S3). `stop_policy` is an axis on the durable
+  cancel intent, independent of cascade scope: absence means IMMEDIATE (frozen
+  programmatic compatibility), `finalize_then_cancel` is 202-pending plus one
+  bounded owner-stop episode owned by `supervisor/owner_stop.py`, transitions
+  are monotonic (immediate hardens, graceful never softens). The owner hurry
+  control is typed and TASK-LOCAL: `kind=hurry` through the owner mailbox only,
+  never a chat message, never owner prose in `_drain_incoming_messages`, never
+  a global settings mutation, never a P3/commit/review-gate weakening — these
+  hold for every install configuration class. Its durable projection writes
+  ONLY through `update_json_locked` on the `owner_hurry`/`owner_hurry_history`
+  keys (never `write_task_result`), is keyed by `task["_attempt"]`, and every
+  same-id requeue producer (reaper timeout AND crash requeue) must call the
+  ONE shared `owner_hurry.retry_reset`. UI surfaces share
+  `web/modules/task_control_menu.js`; the `owner_hurry` event family is
+  non-chat (`log_events.js` hides it with `visible=false`).
 - `forward_to_worker` may write only to validated running tasks whose lineage
   belongs to the current task/root, and must route forked/empty child subagents
   to the child-drive mailbox.
@@ -1758,8 +1835,10 @@ leak into the desktop launcher's libpython, then wraps that proven x86_64
 payload into `.deb`, generic `.rpm`, and RED OS 8 `.rpm` assets. Their metadata
 declares Git, which packaged bootstrap requires; the gating smoke installs
 through `apt` or `dnf` in Ubuntu 22.04/Fedora 42 and proves dependency
-resolution, desktop integration, the real packaged CLI, and a bounded
-desktop-launcher start. Vendor
+resolution, desktop integration, the installed opt-in systemd user unit and
+its launcher/cgroup/no-restart contract, the real packaged CLI, and a bounded
+desktop-launcher start. The unit never activates during package installation;
+the launcher remains the sole restart and panic-policy owner. Vendor
 image smokes for Astra Linux and RED OS are non-blocking evidence, and their
 outcome is reported without becoming release authority. The separate
 Claudexor platform gate repeats that fixture path on ordinary branch changes and

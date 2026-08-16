@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
 
 from ouroboros.context import build_health_invariants, build_runtime_section, build_user_content
+
+
+def test_build_llm_messages_has_no_recorder_only_soft_cap_chain():
+    from ouroboros import context as context_module
+    from ouroboros.context import build_llm_messages
+
+    assert "soft_cap_tokens" not in inspect.signature(build_llm_messages).parameters
+    assert not hasattr(context_module, "apply_message_token_soft_cap")
+    source = inspect.getsource(build_llm_messages)
+    assert "estimated_tokens_before" not in source
+    assert "trimmed_sections" not in source
+    assert "context_fit" in source
 
 
 @pytest.mark.parametrize("enforcement", ["blocking", "advisory"])
@@ -157,6 +170,8 @@ def test_runtime_section_includes_filesystem_affordances_with_ctx(tmp_path, monk
     fs = payload["capabilities"]["filesystem"]
 
     assert fs["profile"] == "self_modification"
+    assert "runtime_data" in fs["searchable_roots"]
+    assert "task_drive" not in fs["searchable_roots"]
     assert "task_drive" in fs["allowed_shell_cwd_roots"]
     assert "status" in fs["git_readonly_subcommands"]
     assert "active_workspace" in fs["light_gated_roots"]

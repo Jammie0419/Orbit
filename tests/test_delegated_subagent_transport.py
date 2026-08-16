@@ -1049,12 +1049,12 @@ def test_the_model_has_no_argument_that_could_widen_the_profile():
 
     entry = next(e for e in delegate.get_tools() if e.name == "delegate_start")
     properties = set(entry.schema["parameters"]["properties"])
-    # `retry_of` names an INVOCATION, not authority: the retry path checks ownership
-    # (the requesting task's id on the durable row) and replays a body that was derived
-    # from the same task's own authority, so it can rename nothing and widen nothing.
-    assert properties == {"prompt", "max_seconds", "retry_of"}
-    # Nothing in the schema names authority: no access, mode, isolation, root or scope.
-    assert not properties & {"access", "mode", "isolation", "root", "scope", "write_surface"}
+    # `retry_of` names an INVOCATION, not authority (ownership-checked replay);
+    # root/bucket/skill_name are a SELECTOR resolved through the same
+    # ResolvedResourceBinding authorizer as ordinary writes (R1 item 9).
+    assert properties == {"prompt", "max_seconds", "retry_of", "root", "bucket", "skill_name"}
+    assert entry.schema["parameters"]["properties"]["root"]["enum"] == ["skill_payload"]
+    assert not properties & {"access", "mode", "isolation", "scope", "write_surface", "cwd"}
 
 
 def test_a_read_only_task_cannot_obtain_workspace_write(tmp_path):
@@ -5409,20 +5409,30 @@ def test_a_daemon_that_dies_mid_window_is_refused_not_reported_as_a_quiet_wait(
 
 def test_a_daemon_that_dies_only_at_the_spent_window_poll_still_expires_gracefully(
         tmp_path, monkeypatch):
-    """The other half of the same split, and the reason it is a split rather than a
-    removal. Once the window IS spent there is nothing left to wait for, so a daemon that
-    cannot answer the last poll is this window's expiry — the graceful typed payload,
-    built on what the wait already holds — and never a transport refusal raised out of a
-    tool that is still holding a live, possibly overpowered, run."""
+    """A failed final poll expires a spent window instead of refusing the wait, and preserves prior progress too."""
+    from types import SimpleNamespace
+
+    import ouroboros.tools.delegate as delegate
+
+    clock = {"now": 0.0}
+
+    def sleep(seconds):
+        clock["now"] += seconds
+
+    monkeypatch.setattr(
+        delegate,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock["now"], sleep=sleep),
+    )
     stub = _DiesAfter(answers=1)
 
-    out, elapsed = _wait_against_a_streaming_run(
+    out, _ = _wait_against_a_streaming_run(
         _nanny_ctx(tmp_path), tmp_path, monkeypatch, wait_sec=1, stub=stub)
 
     assert out["status"] == "progress", out
     assert out["waited_sec"] == 1, out
     assert stub.seq == 2, f"the spent window still owes its last poll: {stub.seq}"
-    assert 0.9 <= elapsed < 6.0, elapsed
+    assert clock["now"] == pytest.approx(1.0)
 
 
 def test_the_last_poll_of_a_spent_window_is_bounded_not_skipped(tmp_path, monkeypatch):
