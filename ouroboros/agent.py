@@ -1060,30 +1060,36 @@ class OuroborosAgent:
         # the round-one tool envelope (when the owner enabled it), apply the
         # task-type harness branch (skill preferences + prompt/memory config)
         # and hold the skill recommendations for the prompt block appended
-        # after message build. Classification + history always run; only the
-        # envelope narrowing is gated by the OUROBOROS_SMART_ROUTING flag.
-        try:
-            task_type = self.smart_router.task_classifier.classify(task)
-            branch = self.harness_tree.select_branch(task_type)
-            routing = self.smart_router.route(
-                task,
-                # Unfiltered availability: the round-one filter must never
-                # judge against ITSELF (a filtered view fed back into the next
-                # route shrinks the envelope task after task on one agent).
-                available=set(self.tools.available_tools_unfiltered()),
-                task_type=task_type,
-                skill_preferences=branch.skill_preferences,
-                branch=branch.name,
-            )
-            self.tools.set_router_filter(routing.tool_names if routing.enabled else None)
-            # The harness branch rides on the existing ToolContext: context.py
-            # applies its system-prompt extra and memory-injection config.
-            ctx.harness_branch = branch
-        except Exception:
-            log.warning(
-                "Smart routing failed; falling back to the full envelope",
-                exc_info=True,
-            )
+        # after message build. Harness Tree is part of Smart Router — when
+        # routing is disabled, the entire block (classification + branch
+        # selection + branch adjustments) is skipped.
+        if self.smart_router.routing_enabled():
+            try:
+                task_type = self.smart_router.task_classifier.classify(task)
+                branch = self.harness_tree.select_branch(task_type)
+                routing = self.smart_router.route(
+                    task,
+                    # Unfiltered availability: the round-one filter must never
+                    # judge against ITSELF (a filtered view fed back into the next
+                    # route shrinks the envelope task after task on one agent).
+                    available=set(self.tools.available_tools_unfiltered()),
+                    task_type=task_type,
+                    skill_preferences=branch.skill_preferences,
+                    branch=branch.name,
+                )
+                self.tools.set_router_filter(routing.tool_names if routing.enabled else None)
+                # The harness branch rides on the existing ToolContext: context.py
+                # applies its system-prompt extra and memory-injection config.
+                ctx.harness_branch = branch
+            except Exception:
+                log.warning(
+                    "Smart routing failed; falling back to the full envelope",
+                    exc_info=True,
+                )
+                routing = None
+                self.tools.set_router_filter(None)
+        else:
+            # Smart Router disabled: no classification, no routing, no branch adjustments
             routing = None
             self.tools.set_router_filter(None)
 
