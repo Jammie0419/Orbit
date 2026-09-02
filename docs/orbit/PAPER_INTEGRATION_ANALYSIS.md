@@ -1,8 +1,8 @@
 # Ouroboros 七大不足与论文融合优化方案
 
 > **分析日期**: 2026-08-11  
-> **最后更新**: 2026-08-12（Phase 4 基于源码分析修订为最小改动方案）  
-> **版本**: 9.0（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存）  
+> **最后更新**: 2026-09-02（不足 3 Harness Tree 归入智能路由范畴，与不足 1+8 放一块标注；无独立开关，随 `OUROBOROS_SMART_ROUTING` 启用）  
+> **版本**: 9.1（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存；智能路由章节并入不足 3）  
 > **核心原则**: 按不足点组织，合并相似方案，突出自进化创新  
 > **适配度要求**: 最高，不强行融合  
 > **代码改动**: 最小，到位有用
@@ -33,7 +33,7 @@
 |------|----------|---------|--------|--------|
 | **不足 1 + 不足 8** | **Unified Smart Router**（智能路由） | ~500 行 | P1 | 工具+技能统一路由 |
 | 不足 2 | Smart Memory | ~400 行 | P2 | 重要性评估+智能淘汰 |
-| 不足 3 | Harness Tree | ~500 行 | P1 | 任务特定配置 |
+| 不足 3（并入智能路由） | **Harness Tree** — 智能路由的任务适配层 | ~500 行 | P1 | 任务特定配置 |
 | 不足 4 + 不足 7 | Multi-Agent Evolver | ~400 行 | P1 | 结构化进化方法论 |
 | **不足 5 + 轨迹信用分配** | **Trajectory-based Experience Learning** | ~500 行 | P1 | 步骤级信用分配 |
 | 不足 6 | Prompt Optimization | ~300 行 | P2 | 基于历史优化 prompt |
@@ -43,7 +43,7 @@
 **总代码改动**: ~4440 行（Phase 1-2: ~2600 行 + Phase 3: ~1200 行 + Phase 4: ~640 行）
 
 **关键创新**：
-- ✅ **智能路由**：工具和技能统一路由，共享任务分类器
+- ✅ **智能路由**：工具和技能统一路由 + Harness Tree 任务适配（不足 3 是智能路由的纵向扩展），共享任务分类器与开关
 - ✅ **轨迹信用分配**：不仅学习整体经验，还学习每个步骤的经验
 - ✅ **技能进化**：自动生成技能 + 持续进化 + 质量感知路由（Phase 3）
 - ✅ **搜索索引 + 语义检索**：SQLite FTS5 搜索历史会话 + MemOS 语义检索 + 上下文缓存（Phase 4）
@@ -106,7 +106,9 @@ graph TD
 
 ### 融合方案：Unified Smart Router
 
-> **✅ 实现状态（2026-08-15）**：已实现于 `ouroboros/smart_router.py`，接入 `ouroboros/agent.py`、`ouroboros/tools/registry.py`、`ouroboros/tool_policy.py`，开关 `OUROBOROS_SMART_ROUTING`（默认关闭，opt-in）。一个任务分类器同时驱动工具信封收窄（round-one schema envelope）与技能 Top-K 推荐；分类支持 type hint / workspace / 中英文 description+text 关键词；自建技能（双来源校验）在同等相关度下平局优先；每轮路由决策写入 `state/routing_history.jsonl`。`get_schema_by_name` 保持不受过滤，`enable_tools` 逃生通道始终可用。自动化回归见 `tests/test_smart_router.py`（17 例），真实 LLM 冒烟脚本见 `scripts/live/routing/smart_router_live_smoke.py` / `_multi.py` / `_rounds.py`。
+> **✅ 实现状态（2026-08-15，2026-09-02 完善）**：已实现于 `ouroboros/smart_router.py`，接入 `ouroboros/agent.py`、`ouroboros/tools/registry.py`、`ouroboros/tool_policy.py`，开关 `OUROBOROS_SMART_ROUTING`（默认关闭，opt-in）。一个任务分类器同时驱动工具信封收窄（round-one schema envelope）与技能 Top-K 推荐；分类支持 type hint / workspace / memory_mode / 中英文 description+text 关键词（2026-09-02 补充"操作电脑""内容写作"等形态词，并新增 `classify_with_signal` 信号判定——完全无信号的任务走 main 中性兜底）；自建技能（双来源校验）在同等相关度下平局优先；每轮路由决策写入 `state/routing_history.jsonl`。`get_schema_by_name` 保持不受过滤，`enable_tools` 逃生通道始终可用。板块实现细节（评分数值/阈值 Top-K/信封清单/流程示例）见 **[SMART_ROUTING_BOARD.md](./SMART_ROUTING_BOARD.md)**。自动化回归见 `tests/test_smart_router.py`（21 例），真实 LLM 冒烟脚本见 `scripts/live/routing/smart_router_live_smoke.py` / `_multi.py` / `_rounds.py`。
+>
+> **📌 与不足 3 放一块（同属智能路由）**：**Harness Tree 不是独立机制，而是本文所述智能路由的纵向扩展**，同归"智能路由"范畴——两者共享同一个 `TaskClassifier`、同一次分类结果、同一个开关 `OUROBOROS_SMART_ROUTING`（Harness Tree 无独立开关，关闭路由即关闭分支适配）。在 `agent.py` 同一段流程中完成：分类一次 → `HarnessTree.select_branch(task_type)`（读 `harness_configs/` 分支配置）→ `SmartRouter.route(task_type, skill_preferences, branch)`：工具信封收窄（**横向**：哪些工具/技能可见）+ 分支注入（**纵向**：system prompt 额外段、memory 注入过滤）。因此不足 1、不足 8、不足 3 三者是"一个分类器 → 水平路由 + 垂直适配"的一体化智能路由。详见下文「不足 3」章。
 
 **来源**：Self-Improvements Survey - Tool Dynamic Routing（扩展到技能系统）  
 **适配度**：⭐⭐⭐⭐⭐  
@@ -1021,7 +1023,7 @@ def build_llm_messages(env, ...):
 
 ---
 
-## 🔍 不足 3: 任务适应性不足
+## 🔍 不足 3（智能路由的任务适配层）: 任务适应性不足 — Harness Tree
 
 ### 现状分析
 
@@ -1082,7 +1084,11 @@ graph TD
 
 ### 融合方案：Harness Tree
 
-> **✅ 实现状态（2026-08-15）**：已实现于 `ouroboros/harness_tree.py` + 仓库根 `harness_configs/`（main + coding/research/knowledge/simple 四分支），接入 `ouroboros/agent.py`、`ouroboros/context.py`。每任务一次分类 → `HarnessTree.select_branch(task_type)` → 复用 SmartRouter 的 `route()`（`task_type`/`skill_preferences`/`branch`）→ 分支配置经 `ctx.harness_branch` 注入 system prompt 额外段 + memory 注入过滤。分支只调配置不重新分类、不持有工具集（工具引用 `smart_router.TOOL_SETS`，与路由不会漂移）；缺失分支兜底空 `main`。自动化回归见 `tests/test_harness_tree.py`（13 例）。
+> **✅ 实现状态（2026-08-15，2026-09-02 L2 升级）**：已实现于 `ouroboros/harness_tree.py` + 仓库根 `harness_configs/`（main + coding/research/knowledge/simple 四分支），接入 `ouroboros/agent.py`、`ouroboros/context.py`。每任务一次分类 → `HarnessTree.select_branch(task_type)` → 复用 SmartRouter 的 `route()`（`task_type`/`skill_preferences`/`branch`）→ 分支配置经 `ctx.harness_branch` 注入 system prompt 额外段 + memory 注入过滤。分支只调配置不重新分类、不持有工具集（工具引用 `smart_router.TOOL_SETS`，与路由不会漂移）；缺失分支兜底空 `main`。自动化回归见 `tests/test_harness_tree.py`（24 例）。板块全文档见 **[SMART_ROUTING_BOARD.md](./SMART_ROUTING_BOARD.md)**。
+>
+> **📌 与智能路由放一块**：本章是「不足 1 + 不足 8」智能路由的**任务适配层**（同属智能路由范畴）：同一 `TaskClassifier`、同一次分类、同一个 `OUROBOROS_SMART_ROUTING` 开关——**无独立开关**，开启该开关即同时启用分支适配，关闭即同时关闭。代码上二者在 `agent.py` 同一段流程中联动（classify → `select_branch` → `route`），详见「不足 1 + 不足 8」章的关系标注。
+>
+> **⬆️ L2 专业化升级（2026-09-02）**：分支配置升级为"方向级执行策略"——新增 `anti_patterns.md`（负向指令段，渲染为独立 `## Avoid` 段，紧跟正向 extra 之后）、`tool_preferences.json`（工具信封 `avoid` 收窄——只剔除 `TOOL_SETS` 内工具、控制面 `ALWAYS_ON_TOOLS` 免疫、未知名静默丢弃）、`skill_preferences` 负向维度（`demote` 具名 -0.5 / `demote_tags` 标签 -0.2，大于任何正向增量组合，必跌破 0.6 推荐阈值即推出）；修复 memory registry 过滤空转（`_apply_harness_registry_config`，仅显式提及 "memory registry" 的分支有话语权）与配置容错（坏 boost 值/损坏 JSON 不再毒化整棵树）；四分支策略按其成败路径重写（coding 定位→最小改动→构建门→diff 证据；research 双源校验→来源跟踪；knowledge 先查后写→索引纪律；simple 最小应答→显式升级）。设计规范、评分数值、四分支配置、完整流程示例与 L3/L4 路线见 **[SMART_ROUTING_BOARD.md](./SMART_ROUTING_BOARD.md)**（智能路由板块实现全文档）。回归见 `tests/test_harness_tree.py`（24 例）与 `tests/test_smart_router.py`（21 例）全部通过。分类器同期补充"操作电脑→coding、内容写作→research"形态关键词（coding 信封补入 `skill_exec`/`list_skills`），并新增信号判定：**完全无信号的任务走 main 中性兜底**（不继承 simple 分支的轻量假设），工具信封仍按保守 simple 集、路由与技能推荐照常。
 
 **来源**：Adaptive Auto-Harness - Harness Tree  
 **适配度**：⭐⭐⭐⭐⭐  
@@ -2909,7 +2915,7 @@ def invalidate_stable_context(session_id: str = None):
 |------|----------|---------|--------|--------|
 | **不足 1 + 不足 8** | **Unified Smart Router** | ~500 行 | P1 | 工具+技能统一路由 |
 | 不足 2 | Smart Memory | ~400 行 | P2 | 重要性评估+智能淘汰 |
-| 不足 3 | Harness Tree | ~500 行 | P1 | 任务特定配置 |
+| 不足 3（并入智能路由） | **Harness Tree** — 智能路由的任务适配层 | ~500 行 | P1 | 任务特定配置 |
 | **不足 4 + 不足 7** | **Multi-Agent Evolver** | ~400 行 | P1 | 结构化进化方法论 |
 | **不足 5 + 轨迹信用分配** | **Trajectory-based Experience Learning** | ~500 行 | P1 | 步骤级信用分配 |
 | 不足 6 | Prompt Optimization | ~300 行 | P2 | 基于历史优化 prompt |
@@ -2919,7 +2925,7 @@ def invalidate_stable_context(session_id: str = None):
 **总代码改动**: ~4440 行（Phase 1-2: ~2600 行 + Phase 3: ~1200 行 + Phase 4: ~640 行）
 
 **关键创新**：
-- ✅ **智能路由**：工具和技能统一路由，共享任务分类器
+- ✅ **智能路由**：工具和技能统一路由 + Harness Tree 任务适配（不足 3 是智能路由的纵向扩展），共享任务分类器与开关
 - ✅ **轨迹信用分配**：不仅学习整体经验，还学习每个步骤的经验
 - ✅ **技能进化**：自动生成技能 + 持续进化 + 质量感知路由
 - ✅ **搜索索引 + 语义检索**：SQLite FTS5 搜索历史会话 + MemOS 语义检索 + 上下文缓存
@@ -2957,7 +2963,7 @@ gantt
    - 修改：`ouroboros/agent.py`
    - 预期收益：Token -50-70%，工具/技能选择准确率 +30-40%
 
-2. **Harness Tree**（10 天）- 解决不足 3
+2. **Harness Tree**（10 天）- 解决不足 3（智能路由的任务适配层，随 `OUROBOROS_SMART_ROUTING` 开关启用）
    - 新增：`ouroboros/harness_tree.py`
    - 新增：`ouroboros/harness_configs/`
    - 修改：`ouroboros/agent.py`
@@ -3047,9 +3053,9 @@ gantt
 ### 关键文件清单
 
 **新增文件**（~4050 行）：
-- `ouroboros/smart_router.py` (~500 行) - 解决不足 1 + 8 (Phase 1)
+- `ouroboros/smart_router.py` (~500 行) - 解决不足 1 + 8 (Phase 1)（含不足 3 的适配层联动）
 - `ouroboros/memory_ext/smart_memory.py` (~400 行) - 解决不足 2 (Phase 2)
-- `ouroboros/harness_tree.py` (~500 行) - 解决不足 3 (Phase 1)
+- `ouroboros/harness_tree.py` (~500 行) - 解决不足 3 (Phase 1)（智能路由的纵向扩展，共享分类器与开关）
 - `ouroboros/evolution/multi_agent_evolver.py` (~400 行) - 解决不足 4 + 7 (Phase 1)
 - `ouroboros/evolution/trajectory_experience_learner.py` (~500 行) - 解决不足 5 + 轨迹信用分配 (Phase 1)
 - `ouroboros/evolution/prompt_optimizer.py` (~300 行) - 解决不足 6 (Phase 2)
@@ -3070,6 +3076,7 @@ gantt
 1. **Unified Smart Router**（Phase 1）：
    - 工具和技能统一路由
    - 共享任务分类器
+   - Harness Tree 任务适配（不足 3）：system prompt / memory 注入按任务类型分支，随路由同一开关
    - Token 节省 50-70%
 
 2. **Trajectory-based Experience Learning**（Phase 1）：
@@ -3116,6 +3123,6 @@ gantt
 ---
 
 **文档生成时间**: 2026-08-12  
-**最后更新**: 2026-08-12（Phase 4 基于源码分析修订为最小改动方案 - 搜索索引+MemOS+上下文缓存，~640 行）  
+**最后更新**: 2026-09-02（不足 3 Harness Tree 归入智能路由，与不足 1+8 放一块；此前 2026-08-12 Phase 4 基于源码分析修订为最小改动方案 - 搜索索引+MemOS+上下文缓存，~640 行）  
 **分析工具**: Claude Code + Ouroboros Source Analysis  
-**文档版本**: 9.0 (Phase 4 最小改动版 - 基于源码分析)
+**文档版本**: 9.1 (Phase 4 最小改动版 - 基于源码分析；智能路由并入不足 3)
