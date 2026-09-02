@@ -391,6 +391,12 @@ def _resolve_task_cost_ceiling(
 # usage_accounting telemetry note and the e4a87344 contention class).
 _TREE_ACCOUNTING_MAX_STALE_SEC = 120.0
 
+# Consecutive length-truncated rounds (empty response at the max_tokens cap with
+# finish_reason=null) allowed before the task degrades to the provider-unavailable
+# rail. The cap keeps a provider that hits the cap on EVERY request from spinning
+# rounds; a single cap is expected to recover on the very next round.
+_MAX_LENGTH_TRUNCATED_SKIPS = 2
+
 
 def _loop_tree_accounting(
     *, refresh: bool, max_age_sec: float = 30.0,
@@ -2414,9 +2420,15 @@ def _run_cross_model_fallback_chain(
     from ouroboros.config import get_fallback_models
     from ouroboros.loop_llm_call import _COOLDOWN_ERROR_KINDS as _cooldown_kinds
 
+    # Task-scoped exclusion hash — prevents oscillation (models that already failed
+    # during this task are skipped permanently, not just during cooldown).
+    _tid_hash = _fcd._task_id_hash(task_id)
+
     def _cooled(model: str, use_local: bool) -> None:
         if str(accumulated_usage.get("_last_llm_error_kind") or "") in _cooldown_kinds:
             _fcd.mark_cooldown(model, use_local)
+        # Also permanently exclude — once we've moved on from a model, don't cycle back.
+        _fcd.mark_permanently_excluded(_tid_hash, model, use_local)
 
     _cooled(active_model, active_use_local)
     primary_context_usage = _snapshot_context_fit_usage(accumulated_usage)
@@ -2425,6 +2437,8 @@ def _run_cross_model_fallback_chain(
     msg = None
     for fallback_model in get_fallback_models(active_model):
         if _fcd.is_cooling_down(fallback_model, fallback_use_local):
+            continue
+        if _fcd.is_permanently_excluded(_tid_hash, fallback_model, fallback_use_local):
             continue
         deadline = _task_deadline_epoch(tools)
         if deadline and time.time() >= deadline:
@@ -2436,6 +2450,19 @@ def _run_cross_model_fallback_chain(
         # a different family (the GLM->Claude 400 "Invalid signature" death); the SSOT
         # sanitizer is a no-op same-family.
         fallback_messages = LLMClient.sanitize_reasoning_on_model_switch(messages, active_model, fallback_model)
+        # Fallback context trim: when switching models, the old model's cache is useless
+        # (different cache namespace). A 138K prompt with 0 cache hits is worse than a
+        # 60K trimmed prompt — both are cold, but the smaller one finishes faster and
+        # is less likely to timeout. Keep: system message + task + last N messages.
+        _fallback_context_limit = int(os.environ.get("OUROBOROS_FALLBACK_CONTEXT_TOKENS", "") or 80_000)
+        _est_tokens = sum(
+            len(str(m.get("content", ""))) // 4 for m in fallback_messages if isinstance(m, dict)
+        )
+        if _est_tokens > _fallback_context_limit and len(fallback_messages) > 6:
+            # Keep first message (system/task) + last 20 messages, drop middle.
+            # This preserves the task instruction and recent tool calls/results.
+            fallback_messages = list(fallback_messages[:1]) + list(fallback_messages[-20:])
+            emit_progress(f"⚡ Fallback context trimmed: {_est_tokens} → ~{sum(len(str(m.get('content',''))) // 4 for m in fallback_messages if isinstance(m, dict))} tokens")
         # Bind exact route evidence and choose its deterministic projection BEFORE
         # physical dispatch.  This prevents the fallback's first request from
         # inheriting the failed primary route's Max projection/fingerprint.  It
@@ -2969,7 +2996,36 @@ def _inject_round_checkpoints(
         round_idx, messages, tools, emit_progress,
         event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
     )
-    return bool(checkpoint or time_budget or cost_budget or nanny_economics)
+    # TB optimization: Inject debug loop warnings
+    debug_warning = _maybe_inject_debug_loop_warning(messages, tools)
+    return bool(checkpoint or time_budget or cost_budget or nanny_economics or debug_warning)
+
+
+def _maybe_inject_debug_loop_warning(
+    messages: List[Dict[str, Any]],
+    tools: ToolRegistry,
+) -> bool:
+    """TB optimization: Inject debug loop warning if agent has 3+ consecutive tool errors.
+
+    This helps prevent the agent from getting stuck in infinite debug loops by
+    reminding it to try a different approach or prioritize deliverables."""
+    ctx = getattr(tools, "_ctx", None)
+    if ctx is None:
+        return False
+
+    warnings = getattr(ctx, "_pending_debug_warnings", None)
+    if not warnings:
+        return False
+
+    # Inject the first pending warning
+    warning_text = warnings.pop(0)
+    messages.append({"role": "user", "content": warning_text})
+
+    # Clear the list if empty
+    if not warnings:
+        ctx._pending_debug_warnings = []
+
+    return True
 
 
 def _last_assistant_text(messages: List[Dict[str, Any]]) -> str:
@@ -5486,6 +5542,16 @@ def _forced_final_answer(
         return router_result
     tools_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
     prompt += _forced_delegation_note(tools_ctx, llm_trace)
+    # Task capability: inject workspace delivery snapshot into finalization prompt
+    # so the agent can see what files it has written before the deadline hits.
+    try:
+        from ouroboros.task_capabilities import delivery_snapshot as _ds
+
+        _snap = _ds.workspace_snapshot(getattr(ctx, "workspace_root", "") or "/app")
+        if _snap:
+            prompt = _ds.inject_into_finalization_prompt(prompt, _snap)
+    except Exception:
+        log.debug("delivery_snapshot injection failed (non-fatal)", exc_info=True)
     _append_or_merge_user_message(ctx.messages, prompt)
     extracted = ""
     for attempt in range(1 if single_semantic_turn else 2):
@@ -6948,24 +7014,48 @@ def run_llm_loop(
             tools._ctx._current_llm_call_meta = dict(accumulated_usage.get("_last_llm_call_meta") or {})
 
             if msg is None and not bool(getattr(ctx, "exact_model_route", False)):
-                (
-                    msg,
-                    active_model,
-                    active_use_local,
-                    context_fit_plan,
-                    active_context_mode,
-                ) = _run_cross_model_fallback_chain(
-                    llm=llm, ctx=ctx, tools=tools, messages=messages, active_model=active_model,
-                    active_use_local=active_use_local, tool_schemas=tool_schemas, active_effort=active_effort,
-                    max_retries=max_retries, drive_logs=drive_logs, task_id=task_id, round_idx=round_idx,
-                    event_queue=event_queue, accumulated_usage=accumulated_usage, task_type=task_type,
-                    emit_progress=emit_progress, context_fit_plan=context_fit_plan,
-                    active_context_mode=active_context_mode)
+                # Skip fallback chain for length_truncated — fast-fail without wasting time
+                # on cross-model fallback when the provider hit the max_tokens cap.
+                if accumulated_usage.get("_last_llm_error_kind") != "length_truncated":
+                    (
+                        msg,
+                        active_model,
+                        active_use_local,
+                        context_fit_plan,
+                        active_context_mode,
+                    ) = _run_cross_model_fallback_chain(
+                        llm=llm, ctx=ctx, tools=tools, messages=messages, active_model=active_model,
+                        active_use_local=active_use_local, tool_schemas=tool_schemas, active_effort=active_effort,
+                        max_retries=max_retries, drive_logs=drive_logs, task_id=task_id, round_idx=round_idx,
+                        event_queue=event_queue, accumulated_usage=accumulated_usage, task_type=task_type,
+                        emit_progress=emit_progress, context_fit_plan=context_fit_plan,
+                        active_context_mode=active_context_mode)
             if msg is None:
+                # length_truncated (finish_reason=null at the max_tokens cap) is a provider
+                # gateway quirk, NOT an outage: the fallback chain was skipped above, and the
+                # task should keep going on the SAME model next round — the very next request
+                # typically succeeds (observed: rescue call answered normally ~90s later).
+                # Cap consecutive skips so a provider that keeps capping every response still
+                # terminalizes as infra instead of spinning rounds.
+                if (
+                    accumulated_usage.get("_last_llm_error_kind") == "length_truncated"
+                    and int(accumulated_usage.get("_length_truncated_skips") or 0)
+                    < _MAX_LENGTH_TRUNCATED_SKIPS
+                ):
+                    accumulated_usage["_length_truncated_skips"] = (
+                        int(accumulated_usage.get("_length_truncated_skips") or 0) + 1
+                    )
+                    emit_progress(
+                        "Provider output hit the max_tokens cap (length-truncated); "
+                        "continuing with the same model on the next round."
+                    )
+                    continue
                 # Exact actor routes skip generic substitution and fail as infrastructure.
                 text, accumulated_usage, forced_trace = _handle_provider_unavailable(limit_ctx)
                 _merge_finalization_trace(llm_trace, forced_trace)
                 return text, accumulated_usage, llm_trace
+            # A usable response breaks any consecutive length-truncated skip streak.
+            accumulated_usage.pop("_length_truncated_skips", None)
 
             from ouroboros.openai_chat_dispatch import CUSTOM_RECEIPTS_USAGE_KEY
 

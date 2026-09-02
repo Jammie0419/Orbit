@@ -504,6 +504,15 @@ def supports_vision(model_id: str) -> bool:
         return False
     if normalized in _VISION_OVERLAY:
         return _VISION_OVERLAY[normalized]
+    # Task capability: check extra vision prefixes from env before static table
+    try:
+        from ouroboros.task_capabilities import vision_registry as _vr
+
+        for prefix in _vr.extra_vision_prefixes():
+            if normalized.startswith(prefix):
+                return True
+    except Exception:
+        pass
     return normalized.startswith(_VISION_MODEL_PREFIXES)
 
 

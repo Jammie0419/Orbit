@@ -2265,8 +2265,11 @@ class LLMClient:
             else:
                 # Central worker policy: remote calls from worker processes avoid
                 # system proxy lookup without every caller remembering a flag.
-                no_proxy = no_proxy or in_worker_process()
+                # Explicit proxy fix (root 1): openai-compatible via host Clash
+                # must respect HTTP_PROXY (NO_PROXY keeps domestic mirrors direct)
                 target = self._resolve_remote_target(model)
+                is_openai_compat = target.get("provider") == "openai-compatible"
+                no_proxy = no_proxy or (in_worker_process() and not is_openai_compat)
                 message, usage = self._chat_remote(
                     target, messages, tools, reasoning_effort, max_tokens, tool_choice, temperature,
                     no_proxy=no_proxy,
@@ -2296,7 +2299,10 @@ class LLMClient:
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Async remote chat; no_proxy keeps forked macOS workers off OS proxy APIs."""
         messages = self._normalize_system_message_placement(messages)
-        no_proxy = no_proxy or in_worker_process()
+        # Explicit proxy fix: keep openai-compatible on proxy path (mirrors still direct via NO_PROXY)
+        _async_target = self._resolve_remote_target(model)
+        _is_openai_compat_async = _async_target.get("provider") == "openai-compatible"
+        no_proxy = no_proxy or (in_worker_process() and not _is_openai_compat_async)
         if tools:
             raise ValueError("chat_async does not support tool calls")
         target = self._resolve_remote_target(model)

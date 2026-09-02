@@ -95,6 +95,13 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     "OUROBOROS_MODEL_LIGHT": OPENROUTER_DEFAULTS["light"],
     "OUROBOROS_MODEL_VISION": OPENROUTER_DEFAULTS["vision"],
     "OUROBOROS_IMAGE_INPUT_MODE": "auto",
+    # --- Task capabilities (ablation): generic, benchmark-neutral ---
+    # Each is gated by OUROBOROS_CAP_* env var. Default "0" = off (no behavior change).
+    # See ouroboros/task_capabilities/ for module implementations.
+    "OUROBOROS_CAP_TIME_CHECKPOINTS": "0",
+    "OUROBOROS_CAP_DELIVERY_SNAPSHOT": "0",
+    "OUROBOROS_CAP_TOOL_FIX": "",
+    "OUROBOROS_VISION_EXTRA_PREFIXES": "",
     # Background consciousness is a high-horizon loop, not a cheap helper lane.
     "OUROBOROS_MODEL_CONSCIOUSNESS": OPENROUTER_DEFAULTS["consciousness"],
     # Cross-model resilience CHAIN (comma-separated, ordered). A single model is a

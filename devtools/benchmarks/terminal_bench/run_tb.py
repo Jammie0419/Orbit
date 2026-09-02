@@ -16,6 +16,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -79,6 +80,51 @@ _ALL_MODEL_SLOT_KEYS = (
 )
 
 
+def _ensure_uv_bin_in_cache(cache_dir: pathlib.Path) -> None:
+    """Place usable uv/uvx binaries at <cache_dir>/uv-bin/ (idempotent).
+
+    The injected verifier test.sh tries /opt/ouro-pip-cache/uv-bin/uv FIRST before any
+    download, so these files make every verifier/agent container reuse the host's
+    uv/uvx (CN: GitHub releases are blocked; astral's install.sh burns ~300s and a
+    truncated gh-proxy download leaves a corrupt uv/uvx that segfaults; the original
+    test.sh invokes ``uvx``, so BOTH binaries must be present). Copy from the host
+    PATH when a cached copy is missing or its version differs; leave operator-pinned
+    binaries untouched otherwise.
+    """
+    try:
+        import shutil
+        import subprocess
+
+        uv_bin_dir = cache_dir / "uv-bin"
+        uv_bin_dir.mkdir(parents=True, exist_ok=True)
+        host_uv = shutil.which("uv")
+        if not host_uv:
+            return
+        host_uvx = shutil.which("uvx")
+        try:
+            host_ver = subprocess.run(
+                [host_uv, "--version"], capture_output=True, text=True, timeout=10
+            ).stdout.strip()
+        except Exception:
+            host_ver = ""
+        for name, host_path in (("uv", host_uv), ("uvx", host_uvx)):
+            target = uv_bin_dir / name
+            cached_ver = ""
+            if target.exists():
+                try:
+                    cached_ver = subprocess.run(
+                        [str(target), "--version"], capture_output=True, text=True, timeout=10
+                    ).stdout.strip()
+                except Exception:
+                    cached_ver = ""
+            if host_path and (not target.exists() or (host_ver and cached_ver != host_ver)):
+                shutil.copy2(host_path, target)
+                target.chmod(0o755)
+    except Exception:
+        # Best effort only: the verifier's download fallback still exists.
+        pass
+
+
 def apply_all_model(model: str, review_slots: int = 1,
                     review_effort: str = "low") -> dict[str, Any]:
     """Force every FORWARDED model slot to ``model`` for a single-model run. Mutates only this
@@ -113,6 +159,7 @@ class HarborCommandConfig:
     settings_path: pathlib.Path
     execute: bool
     light_model: str
+    force_build: bool = False
     review_enforcement: str = "blocking"
     safety_mode: str = "light"
     setup_timeout_multiplier: float = 1.0
@@ -507,7 +554,9 @@ def resolved_model_slots(config: HarborCommandConfig) -> dict[str, str]:
     }
     if config.model:
         slots["OUROBOROS_MODEL"] = config.model
-        slots["OUROBOROS_MODEL_FALLBACKS"] = config.model
+        slots["OUROBOROS_MODEL_FALLBACKS"] = (
+            os.environ.get("OUROBOROS_MODEL_FALLBACKS", "").strip() or config.model
+        )
     if config.light_model:
         slots["OUROBOROS_MODEL_LIGHT"] = config.light_model
     return {key: value for key, value in slots.items() if key in ACTIVE_MODEL_SLOT_KEYS}
@@ -553,9 +602,45 @@ def harbor_command(config: HarborCommandConfig) -> list[str]:
     # This is NOT a leaderboard-config field (it's a deploy mount, like --n-concurrent), so it does
     # not affect static_validation. Unset → no --mounts emitted → behavior unchanged.
     pip_cache = os.environ.get("OBO_TB_PIP_CACHE", "").strip()
-    if pip_cache:
-        cache_dir = ensure_outside_repo(pathlib.Path(pip_cache), repo_root_from_devtools())
-        mounts = [{"type": "bind", "source": str(cache_dir), "target": "/opt/ouro-pip-cache"}]
+    apt_cache = os.environ.get("OBO_TB_APT_CACHE", "").strip()
+    hf_cache = os.environ.get("OBO_TB_HF_CACHE", "").strip()
+    if pip_cache or apt_cache or hf_cache:
+        mounts = []
+        if pip_cache:
+            cache_dir = ensure_outside_repo(pathlib.Path(pip_cache), repo_root_from_devtools())
+            mounts.append({"type": "bind", "source": str(cache_dir), "target": "/opt/ouro-pip-cache"})
+            # Verifier uv bootstrap: the injected test.sh reuses an already-installed uv
+            # before downloading (CN: GitHub releases blocked). Place the host's own uv
+            # binary inside the already-mounted cache dir so every verifier/agent
+            # container sees it at /opt/ouro-pip-cache/uv-bin/uv with zero extra mounts.
+            # Idempotent + cheap: refresh only when the cached copy is missing or stale
+            # (version differs) so an operator-pinned binary is left alone when present.
+            _ensure_uv_bin_in_cache(cache_dir)
+        if apt_cache:
+            # Apt cache mount: speeds up repeated apt-get install (e.g., R, system packages)
+            # by caching .deb packages. The agent's apt-get will reuse cached packages.
+            apt_cache_dir = ensure_outside_repo(pathlib.Path(apt_cache), repo_root_from_devtools())
+            mounts.append({"type": "bind", "source": str(apt_cache_dir), "target": "/var/cache/apt"})
+            # ALSO persist /var/lib/apt/lists (the package INDEX database apt-get update populates).
+            # Without this mount apt-get update must re-download ~32MB of Release/Packages files
+            # from the mirror on EVERY container start (~6min at CN network speeds), even though
+            # the .deb files themselves are cached. With the lists persisted, apt-get update only
+            # fetches deltas and typically completes in a few seconds. The lists dir lives in a
+            # SIBLING of the .deb cache dir (auto-derived, zero extra config): same disk, same
+            # mount semantics, same ownership handling.
+            apt_lists_dir = apt_cache_dir.parent / (apt_cache_dir.name + "-lists")
+            apt_lists_dir.mkdir(parents=True, exist_ok=True)
+            mounts.append({"type": "bind", "source": str(apt_lists_dir), "target": "/var/lib/apt/lists"})
+        if hf_cache:
+            # HuggingFace cache mount: speeds up dataset/model downloads by caching HF artifacts.
+            # The datasets library and transformers will reuse cached files instead of downloading.
+            # Mount point /root/.cache/huggingface is the default HF_HOME location.
+            hf_cache_dir = ensure_outside_repo(pathlib.Path(hf_cache), repo_root_from_devtools())
+            mounts.append({"type": "bind", "source": str(hf_cache_dir), "target": "/root/.cache/huggingface"})
+            # Also mount dataset directory at /app/datasets for direct parquet access
+            datasets_dir = hf_cache_dir / "OpenThoughts-1k-sample"
+            if datasets_dir.exists():
+                mounts.append({"type": "bind", "source": str(datasets_dir), "target": "/app/datasets"})
         cmd.extend(["--mounts", json.dumps(mounts)])
     # Execution backend (harbor's own `-e/--env`). Harbor's default is `docker`, i.e. the LOCAL
     # docker daemon, and Frontier-Bench was verified to run there end-to-end on harbor 0.18.0 (the
@@ -607,7 +692,7 @@ def harbor_command(config: HarborCommandConfig) -> list[str]:
         cmd.extend(["--ve", value])
     for task in config.task_filters:
         cmd.extend(["--include-task-name", task])
-    if config.execute:
+    if config.execute and config.force_build:
         cmd.append("--force-build")
     return cmd
 
@@ -852,6 +937,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--low-k-floor", type=int, default=5, help="k below this is graded local/low-confidence (debug_only at k=1) in report_grade (default 5).")
     parser.add_argument("--n-concurrent", type=int, default=1)
     parser.add_argument("--task", action="append", default=[], help="optional include-task-name; repeatable")
+    parser.add_argument("--tasks-file", default="", help="read task names from file (one per line); merged with --task")
     parser.add_argument("--review-enforcement", default="blocking", choices=["blocking", "advisory"],
                         help="in-task review enforcement mode forwarded to the container (default blocking)")
     parser.add_argument("--safety-mode", default="light", choices=["full", "light", "off"],
@@ -866,6 +952,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-name", default="Ouroboros")
     parser.add_argument("--org-name", default="Ouroboros")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--model-preflight",
+        dest="model_preflight",
+        action="store_true",
+        help="（默认已开启，可省略）派发前探活 openai-compatible 端点；网关不通立即中止本轮并报错，"
+        "不等待、不重试",
+    )
+    parser.add_argument(
+        "--no-model-preflight",
+        dest="model_preflight",
+        action="store_false",
+        help="关闭模型前置探活闸门（默认开启；关闭=恢复旧行为：端点不可用时任务照样下发、白烧预算）",
+    )
+    parser.set_defaults(model_preflight=True)
+    parser.add_argument("--model-preflight-probes", type=int, default=1,
+                        help="单次探活连发的最小补全次数（默认 1 = 不通即中止，不重探）")
+    parser.add_argument("--force-build", action="store_true", help="force Docker image rebuild (default: use cached images)")
     parser.add_argument("--setup-timeout-multiplier", type=float, default=1.0)
     parser.add_argument("--build-timeout-multiplier", type=float, default=1.0)
     parser.add_argument(
@@ -957,9 +1060,100 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_model_preflight(
+    *,
+    model: str,
+    probes_per_attempt: int,
+) -> bool:
+    """OpenAI-compatible 端点探活：派发任务前确认 LLM 网关可用，不通立即中止。
+
+    背景：opencode.ai 网关后的 Cloudflare 会间歇性对本机请求返回 HTTP 403
+    ``error code: 1010``（浏览器签名/机器人封禁抛给 Python/urllib 类客户端），
+    命中时段内 agent 的所有调用拿不到任何 token，任务必 0 分且白烧整个预算。
+    本闸门每轮派发前用 httpx 发一次最小补全请求：HTTP 200 才放行；否则立刻
+    返回 False，由调用方中止本轮执行并报错（不等待、不重试）。
+
+    只对 model 形如 ``openai-compatible::<id>`` 且配置了端点 env 的 run 生效；
+    其它 provider 或缺少 env 时视为探活通过（不改变既有行为）。
+    """
+    if not model.startswith("openai-compatible::"):
+        print("[run_tb] model-preflight: 非 openai-compatible 模型，跳过探活", file=sys.stderr)
+        return True
+    base = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
+    key = str(os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or "").strip()
+    if not base or not key:
+        print("[run_tb] model-preflight: 缺少 OPENAI_COMPATIBLE_BASE_URL/API_KEY，跳过探活", file=sys.stderr)
+        return True
+    try:
+        import httpx
+    except Exception as exc:  # httpx 是 runtime 依赖；万一缺失则 fail-soft
+        print(f"[run_tb] model-preflight: httpx 不可用（{exc!r}），跳过探活", file=sys.stderr)
+        return True
+    model_id = model.split("::", 1)[1] if "::" in model else model
+    url = f"{base.rstrip('/')}/chat/completions"
+    payload = json.dumps({
+        "model": model_id,
+        "messages": [{"role": "user", "content": "reply with the single word ok"}],
+        "max_tokens": 1,
+        "temperature": 0,
+    })
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    ok, desc = _probe_llm_endpoint(httpx, url, payload, headers, probes_per_attempt)
+    if ok:
+        print(f"[run_tb] model-preflight: 网关可用—— {desc}", file=sys.stderr)
+        return True
+    print(
+        f"[run_tb] model-preflight: 网关不可用（{desc}）；"
+        "中止本轮执行，避免白跑一个必 0 分的任务。待网关恢复后重跑本命令。",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _probe_llm_endpoint(httpx: Any, url: str, payload: str, headers: dict, n: int) -> tuple[bool, str]:
+    """连发 n 次最小补全（默认 1，即不重探），任一次 HTTP 200 即视为可用。返回 (ok, 描述)。"""
+    last_desc = f"{n} 次探测均失败"
+    for i in range(1, n + 1):
+        t0 = time.monotonic()
+        try:
+            resp = httpx.post(
+                url,
+                content=payload.encode(),
+                headers=headers,
+                timeout=httpx.Timeout(connect=10.0, read=90.0, write=90.0, pool=10.0),
+                # 直连：不跟随环境代理变量（bench 的 NO_PROXY 已把 opencode.ai 走直连；
+                # trust_env=True 会被环境里残留的 socks/ALL_PROXY 带偏成 ImportError）。
+                trust_env=False,
+            )
+            dt = time.monotonic() - t0
+            if resp.status_code == 200:
+                return True, f"probe {i}/{n} HTTP 200 in {dt:.1f}s"
+            body = (resp.text or "")[:80]
+            hint = "（Cloudflare 1010 WAF 拦截——联系网关加白名单或稍后再试）" if (
+                resp.status_code == 403 and "1010" in body
+            ) else ""
+            last_desc = f"probe {i}/{n} HTTP {resp.status_code} in {dt:.1f}s body={body!r}{hint}"
+        except Exception as exc:
+            dt = time.monotonic() - t0
+            last_desc = f"probe {i}/{n} {type(exc).__name__} after {dt:.1f}s"
+        time.sleep(1)  # 探测间稍作间隔，避免自造速率触发
+    return False, last_desc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+
+    # Read tasks from file if specified and merge with --task
+    if args.tasks_file:
+        tasks_file_path = pathlib.Path(args.tasks_file).expanduser()
+        if tasks_file_path.exists():
+            with open(tasks_file_path, encoding="utf-8") as f:
+                tasks_from_file = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            args.task = list(args.task or []) + tasks_from_file
+            print(f"[run_tb] Loaded {len(tasks_from_file)} tasks from {tasks_file_path}", file=sys.stderr)
+        else:
+            parser.error(f"--tasks-file not found: {tasks_file_path}")
 
     fixed_actor: dict[str, Any] = {}
     if args.all_model:
@@ -1009,7 +1203,7 @@ def main(argv: list[str] | None = None) -> int:
     # (real slots carry `.` and provider suffixes like `:free`, which a strict id rule would reject),
     # so this join is what keeps a hostile model string inside the tree on every OS.
     job_dir = safe_join_under(
-        submission_root, "submissions", *subtree, f"ouroboros__{args.model.replace('/', '-')}", "job",
+        submission_root, "submissions", *subtree, f"ouroboros__{args.model.replace('/', '-').replace(':', '_')}", "job",
     )
     metadata_path = job_dir.parent / "metadata.yaml"
     # Backend + harness provenance, resolved ONCE and shared by the manifest and the ledger so the
@@ -1100,7 +1294,18 @@ def main(argv: list[str] | None = None) -> int:
         }
         manifest["available_subagents"] = fixed_actor["available_subagents"]
         manifest["harness"]["fixed_model_actor"] = fixed_actor
-        # Durable before job-config discovery/version probes and the Harbor subprocess.
+    # TB optimization: snapshot active capabilities for ablation attribution
+    try:
+        from devtools.benchmarks.terminal_bench.exp.capabilities import capability_summary
+        from ouroboros.task_capabilities import enabled_map as _generic_cap_map
+
+        manifest["capabilities"] = {
+            "generic": _generic_cap_map(),
+            **capability_summary(),
+        }
+    except Exception:
+        manifest["capabilities"] = {"error": "capability_snapshot_failed"}
+    # Durable before job-config discovery/version probes and the Harbor subprocess.
         write_json(manifest_path, manifest)
     with finalize_run_manifest(manifest_path, manifest) as final:
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -1118,6 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
             task_filters=list(args.task or []),
             settings_path=settings_path,
             execute=bool(args.execute),
+            force_build=bool(args.force_build),
             light_model=args.light_model,
             review_enforcement=args.review_enforcement,
             safety_mode=args.safety_mode,
@@ -1153,6 +1359,19 @@ def main(argv: list[str] | None = None) -> int:
         if not args.execute:
             final.update({"outcome": "command_generated", "exit_code": 0})
             return 0
+        if args.model_preflight:
+            healthy = run_model_preflight(
+                model=args.model,
+                probes_per_attempt=int(args.model_preflight_probes),
+            )
+            if not healthy:
+                final.update({"outcome": "model_preflight_failed", "exit_code": 3})
+                print(
+                    "[run_tb] 网关不可用，已中止本轮执行（--model-preflight 默认开启）；"
+                    "网关恢复后重跑本命令即可",
+                    file=sys.stderr,
+                )
+                return 3
         completed = subprocess.run(cmd, cwd=repo, env={**os.environ, "PYTHONPATH": str(repo)})
         ledger: dict | None = None
         try:

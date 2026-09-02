@@ -1076,6 +1076,13 @@ def _run_shell(
                     '  run_command(cmd=["sh", "-c", "{ cmd1; cmd2; }"])'
                 )
             if stripped[:1] in ("[", "{") and not is_posix_test_cmd:
+                # Task capability: append enhanced hint if tool_fix msg mode is on
+                _hint = ""
+                try:
+                    from ouroboros.task_capabilities import tool_fix as _tf
+                    _hint = _tf.arg_error_hint()
+                except Exception:
+                    pass
                 return (
                     '⚠️ SHELL_ARG_ERROR: `cmd` looks like a JSON/Python list literal '
                     'but failed to parse cleanly (likely an escape or quote-mismatch '
@@ -1086,6 +1093,7 @@ def _run_shell(
                     '  run_command(cmd=\'["git", "log", "--oneline", "-10"]\')\n\n'
                     'For reading files, prefer `read_file`.\n'
                     'For searching code, prefer `search_code`.'
+                    + _hint
                 )
             try:
                 parts = shlex.split(cmd)
@@ -1096,6 +1104,12 @@ def _run_shell(
         if recovered is not None:
             cmd = recovered
         else:
+            _hint2 = ""
+            try:
+                from ouroboros.task_capabilities import tool_fix as _tf
+                _hint2 = _tf.arg_error_hint()
+            except Exception:
+                pass
             return (
                 '⚠️ SHELL_ARG_ERROR: `cmd` must be a JSON array of strings, not a plain string.\n\n'
                 'Correct usage:\n'
@@ -1105,6 +1119,7 @@ def _run_shell(
                 '  run_command(cmd="grep -r pattern path/")\n\n'
                 'For reading files, prefer `read_file`.\n'
                 'For searching code, prefer `search_code`.'
+                + _hint2
             )
 
     if not isinstance(cmd, list):

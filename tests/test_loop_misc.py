@@ -170,7 +170,8 @@ def test_time_budget_milestone_injects_once_per_threshold(monkeypatch):
     assert injected_again is False
     assert "[TIME BUDGET" in messages[-1]["content"]
     assert "50% remaining" in messages[-1]["content"]
-    assert ctx._time_budget_milestones_seen == {"50%"}
+    # TB optimization: 75% threshold added, so at 50% elapsed both 75% and 50% milestones are crossed
+    assert ctx._time_budget_milestones_seen == {"75%", "50%"}
 
 
 def test_intrinsic_pacing_injects_without_deadline(monkeypatch):

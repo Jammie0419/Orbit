@@ -355,7 +355,8 @@ def improvement_pass_allowed(
 # ---------------------------------------------------------------------------
 # Milestone note content (moved from loop.py; loop keeps only transport).
 
-_TIME_BUDGET_THRESHOLDS = ((0.50, "50%"), (0.25, "25%"), (0.10, "10%"))
+# TB optimization: add 75% threshold for earlier MVP push
+_TIME_BUDGET_THRESHOLDS = ((0.75, "75%"), (0.50, "50%"), (0.25, "25%"), (0.10, "10%"))
 
 # Cost axis (v6.56.0): thresholds are module constants like the time axis —
 # deliberately NOT settings keys (owner decision; the per-task knob is the
@@ -878,7 +879,30 @@ def build_time_budget_note(
         "(write_file/edit_text) and run ONE cheap verify_and_record on it, so a "
         "salvageable, grounded result is in place before the deadline."
         + _tree_flush + _marker_flush
+        + " ENSURE all deliverables are in the workspace root (not /tmp or other "
+        "intermediate directories) with filenames matching the task specification."
         if selected_label == "10%" else ""
+    )
+    # TB optimization: stronger convergence directive at 25% remaining
+    convergence_clause = (
+        " STOP exploring new approaches. Converge on your current best implementation "
+        "and verify it. Do not start any new work streams."
+        if selected_label == "25%" else ""
+    )
+    # TB optimization: MVP push at 75% remaining (25% elapsed)
+    mvp_clause = (
+        " MILESTONE CHECK: You should have a basic working version by now. "
+        "If you're still analyzing/planning, STOP and write minimal code immediately. "
+        "Test it, then iterate. Do not spend more than 25% of budget on analysis."
+        if selected_label == "75%" else ""
+    )
+    # TB optimization: deliverables check at 50% remaining
+    deliverables_clause = (
+        " CRITICAL CHECKPOINT: List all required deliverables from the task description. "
+        "Have you generated ALL required files (e.g., sample files, output files, reports)? "
+        "If any are missing, STOP debugging current code and generate them NOW. "
+        "A working implementation with missing files = failure. Prioritize completeness over perfection."
+        if selected_label == "50%" else ""
     )
     text = (
         f"[TIME BUDGET — {selected_label} remaining crossed]\n"
@@ -887,7 +911,7 @@ def build_time_budget_note(
         "Use this as planning context, not as a command to stop. If a passing artifact "
         "or service already exists, prefer preserving and verifying it over speculative "
         "improvements. If not, focus on the shortest path to a verifiable result."
-        + flush_clause
+        + mvp_clause + deliverables_clause + convergence_clause + flush_clause
     )
     return PacingNote(text=text, checkpoint={
         "checkpoint_kind": "time_budget_milestone",
