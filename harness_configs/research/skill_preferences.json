@@ -1,8 +1,10 @@
 {
-  "description": "Research branch skill bias: boost research/web skills.",
+  "description": "Research branch skill bias: boost research/web skills. No demote — memory tools also serve research (accumulating findings).",
   "boost": {
     "unix_computer_use": 0.1
   },
   "tags": ["research", "web", "search", "data"],
-  "always": []
+  "always": [],
+  "demote": [],
+  "demote_tags": []
 }

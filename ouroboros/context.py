@@ -889,6 +889,38 @@ def _apply_harness_memory_config(
     return sections
 
 
+def _apply_harness_registry_config(digest: str, memory_config: Any) -> str:
+    """Apply the harness branch's memory config to the REGISTRY DIGEST only.
+
+    The registry digest is a separate dynamic section (``_build_registry_digest``),
+    not a stable/volatile memory section, so the section-list filter cannot see
+    it. Only branches that EXPLICITLY mention "memory registry" (in
+    include/exclude/priority) get a say; a branch that never names it keeps
+    the digest exactly as before (default behavior unchanged). ``priority``
+    alone cannot reorder a single section, so it only counts as a mention.
+    """
+    if not digest or memory_config is None:
+        return digest
+    try:
+        include = memory_config.include or None
+        exclude = set(memory_config.exclude or [])
+        priority = memory_config.priority or []
+    except Exception:
+        return digest
+    mentioned = (
+        "memory registry" in (include or [])
+        or "memory registry" in exclude
+        or "memory registry" in priority
+    )
+    if not mentioned:
+        return digest
+    if include is not None and "memory registry" not in include:
+        return ""
+    if "memory registry" in exclude:
+        return ""
+    return digest
+
+
 def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -> str:
     if not entries:
         return ""
@@ -1225,6 +1257,17 @@ def _capture_context_core(
         _extra = getattr(harness_branch, "system_prompt_extra", "") or ""
         if _extra.strip():
             base_prompt = base_prompt.rstrip() + "\n\n" + _extra.strip()
+        # Negative guidance (L2 harness): the branch's anti-patterns render as
+        # their OWN section right after the positive extra — explicit "avoid"
+        # instructions change behavior more than generic positive reminders.
+        _anti = getattr(harness_branch, "anti_patterns", "") or ""
+        if _anti.strip():
+            _branch_name = str(getattr(harness_branch, "name", "") or "task")
+            base_prompt = (
+                base_prompt.rstrip()
+                + f"\n\n## Avoid ({_branch_name} branch)\n\n"
+                + _anti.strip()
+            )
         _memory_config = getattr(harness_branch, "memory_config", None)
     else:
         _memory_config = None
@@ -1316,7 +1359,9 @@ def _capture_context_core(
 
     registry_digest = _build_registry_digest(env)
     if registry_digest:
-        dynamic_parts.append(registry_digest)
+        registry_text = _apply_harness_registry_config(registry_digest, _memory_config)
+        if registry_text:
+            dynamic_parts.append(registry_text)
     installed_skills = _build_installed_skills_section(env)
     if installed_skills:
         dynamic_parts.append(installed_skills)

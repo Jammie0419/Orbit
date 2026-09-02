@@ -1,0 +1,4 @@
+{
+  "description": "Knowledge branch envelope: no tool avoidance. Internal-first is expressed as prompt guidance (retrieve-before-write), not capability removal — knowledge tasks often start from external material (a page/paper to archive), and hard-removing web_search would cut the first hop of those tasks. Hard narrowing belongs to L3 (data-driven) once traces prove a task class never needs a tool.",
+  "avoid": []
+}

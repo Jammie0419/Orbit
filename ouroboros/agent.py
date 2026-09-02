@@ -1064,9 +1064,18 @@ class OuroborosAgent:
         # routing is disabled, the entire block (classification + branch
         # selection + branch adjustments) is skipped.
         if self.smart_router.routing_enabled():
+            from ouroboros.harness_tree import DEFAULT_BRANCH
+
             try:
-                task_type = self.smart_router.task_classifier.classify(task)
-                branch = self.harness_tree.select_branch(task_type)
+                # Signal-less tasks ("nothing hints at a task form") must NOT
+                # inherit the simple branch's lightweight-answer assumptions —
+                # the harness tree selects the neutral main branch for them.
+                # The tool envelope still follows the conservative simple set
+                # via ``task_type`` below.
+                task_type, has_signal = self.smart_router.task_classifier.classify_with_signal(task)
+                branch = self.harness_tree.select_branch(
+                    task_type if has_signal else DEFAULT_BRANCH
+                )
                 routing = self.smart_router.route(
                     task,
                     # Unfiltered availability: the round-one filter must never
@@ -1077,7 +1086,12 @@ class OuroborosAgent:
                     skill_preferences=branch.skill_preferences,
                     branch=branch.name,
                 )
-                self.tools.set_router_filter(routing.tool_names if routing.enabled else None)
+                # Branch-level envelope narrowing (tool_preferences.avoid):
+                # subtract the branch's avoided tools from the routed set. The
+                # registry filter keeps ALWAYS_ON_TOOLS, so the control plane
+                # and the enable_tools escape hatch can never be removed.
+                kept = set(routing.tool_names) - branch.avoided_tools()
+                self.tools.set_router_filter(kept if routing.enabled else None)
                 # The harness branch rides on the existing ToolContext: context.py
                 # applies its system-prompt extra and memory-injection config.
                 ctx.harness_branch = branch

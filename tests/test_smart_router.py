@@ -18,6 +18,7 @@ from ouroboros.smart_router import (
     TASK_TYPE_KNOWLEDGE,
     TASK_TYPE_RESEARCH,
     TASK_TYPE_SIMPLE,
+    TOOL_SETS,
     SmartRouter,
     TaskClassifier,
 )
@@ -100,6 +101,63 @@ def test_classifier_default_is_simple():
     classifier = TaskClassifier()
     assert classifier.classify({"type": "api_task", "description": "Hi there"}) == TASK_TYPE_SIMPLE
     assert classifier.classify({}) == TASK_TYPE_SIMPLE
+
+
+def test_classifier_signal_marks_unknown_tasks():
+    """无信号任务: 类型仍为 simple (保守信封), 但 has_signal=False → harness 走 main。"""
+    classifier = TaskClassifier()
+    kind, signal = classifier.classify_with_signal({})
+    assert kind == TASK_TYPE_SIMPLE
+    assert signal is False
+    # "Hi there" 无关键词 → 同样无信号
+    kind, signal = classifier.classify_with_signal({"type": "api_task", "description": "Hi there"})
+    assert kind == TASK_TYPE_SIMPLE
+    assert signal is False
+    # 显式 type hint / workspace / memory_mode / 关键词 → 均有信号
+    assert classifier.classify_with_signal({"type": "chat"}) == (TASK_TYPE_SIMPLE, True)
+    assert classifier.classify_with_signal(
+        {"type": "api_task", "workspace_root": "C:/p"}) == (TASK_TYPE_CODING, True)
+    assert classifier.classify_with_signal(
+        {"type": "api_task", "memory_mode": "knowledge"})[1] is True
+    assert classifier.classify_with_signal(
+        {"type": "api_task", "description": "Fix the login bug"})[1] is True
+
+
+def test_classifier_computer_operation_and_writing_keywords():
+    """电脑/系统操作 → coding；内容写作 → research；记忆回顾 → knowledge（2026-09-02 补充形态）。"""
+    classifier = TaskClassifier()
+    assert classifier.classify({"type": "api_task", "description": "帮我安装一个软件"}) == TASK_TYPE_CODING
+    assert classifier.classify({"type": "api_task", "text": "在这个电脑上装个软件"}) == TASK_TYPE_CODING
+    assert classifier.classify({"type": "api_task", "description": "写一份周报"}) == TASK_TYPE_RESEARCH
+    assert classifier.classify({"type": "api_task", "description": "把调研结果整理成文档"}) == TASK_TYPE_RESEARCH
+    # 工程生命周期
+    assert classifier.classify(
+        {"type": "api_task", "description": "把服务部署到测试环境"}) == TASK_TYPE_CODING
+    # 检索综合
+    assert classifier.classify(
+        {"type": "api_task", "description": "对比这两篇文章的结论"}) == TASK_TYPE_RESEARCH
+    # 记忆回顾
+    assert classifier.classify(
+        {"type": "api_task", "description": "回顾一下上次的笔记"}) == TASK_TYPE_KNOWLEDGE
+
+
+def test_coding_envelope_carries_skill_execution_surface():
+    """coding 信封含技能执行面 (电脑操作通过技能完成)。"""
+    assert "skill_exec" in TOOL_SETS[TASK_TYPE_CODING]
+    assert "list_skills" in TOOL_SETS[TASK_TYPE_CODING]
+
+
+def test_envelopes_cover_extended_surfaces():
+    """三分支信封覆盖完整工具面 (2026-09-02 核对真实 ToolRegistry 后补齐)。"""
+    coding = TOOL_SETS[TASK_TYPE_CODING]
+    for tool in ("run_ci_tests", "task_acceptance_review", "request_deep_self_review",
+                 "view_image", "analyze_screenshot", "skill_exec", "list_skills"):
+        assert tool in coding, tool
+    research = TOOL_SETS[TASK_TYPE_RESEARCH]
+    for tool in ("extract_video_frames", "list_skills", "skill_exec",
+                 "journal_read", "journal_write"):
+        assert tool in research, tool
+    assert "promote_to_stable" in TOOL_SETS[TASK_TYPE_KNOWLEDGE]
 
 
 # ---------------------------------------------------------------------------

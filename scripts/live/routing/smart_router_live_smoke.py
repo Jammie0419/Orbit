@@ -18,6 +18,10 @@ Verifies end-to-end, against a real model:
   2. The round-one tool envelope is narrowed (schemas served to the loop).
   3. The model is able to call the routed tools (a real tool call happens).
   4. The routing history record carries task_type/branch.
+  5. The harness branch injects BOTH the positive extra and the anti-patterns
+     (## Avoid) section, and the [SMART ROUTING] skill block is present.
+  6. A signal-less task falls back to the neutral main branch (2026-09-02),
+     while the conservative simple tool envelope still applies.
 """
 from __future__ import annotations
 
@@ -36,9 +40,10 @@ def main() -> None:
     from ouroboros.config import load_settings
 
     settings = load_settings()
-    os.environ["OPENAI_COMPATIBLE_API_KEY"] = str(settings.get("OPENAI_COMPATIBLE_API_KEY") or "").strip()
-    os.environ["OPENAI_COMPATIBLE_BASE_URL"] = str(settings.get("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
-    os.environ["OUROBOROS_MODEL"] = str(settings.get("OUROBOROS_MODEL") or "").strip()
+    for _k in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL", "OUROBOROS_MODEL"):
+        _v = str(settings.get(_k) or "").strip()
+        if _v:
+            os.environ[_k] = _v  # settings.json wins only when non-empty; .env-provided values stay
     if not os.environ["OPENAI_COMPATIBLE_API_KEY"]:
         raise SystemExit("OPENAI_COMPATIBLE_API_KEY not configured in settings.json; sync .env first")
     for _k in ("OUROBOROS_REVIEW_MODELS", "OUROBOROS_SCOPE_REVIEW_MODEL",
@@ -67,12 +72,15 @@ def main() -> None:
     ctx, messages, cap_info = agent._prepare_task_context(task)
     branch = ctx.harness_branch
     names = {s["function"]["name"] for s in agent.tools.schemas()}
+    system = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
+    user = " ".join(str(m.get("content") or "") for m in messages if m.get("role") == "user")
     print("=== routing facts ===")
     print("branch:", branch.name)
     print("envelope size:", len(names), "| vcs_status routed:", "vcs_status" in names,
           "| web_search routed:", "web_search" in names)
-    print("system prompt has coding extra:", "Coding Task Focus" in " ".join(
-        str(m.get("content") or "") for m in messages if m.get("role") == "system"))
+    print("prompt extra injected  :", "Coding Task Focus" in system)
+    print("anti-patterns injected :", "Avoid (coding branch)" in system)
+    print("skill block injected    :", "[SMART ROUTING]" in user)
 
     print("\n=== real LLM loop (budget-capped) ===")
     from ouroboros.loop import run_llm_loop
@@ -104,6 +112,15 @@ def main() -> None:
         print("task_type:", rec.get("task_type"), "| branch:", rec.get("branch"),
               "| tools:", len(rec.get("tools") or []))
     print("\nusage cost_usd:", usage.get("cost_usd"), "| status:", usage.get("execution_status"))
+
+    print("\n=== signal-less fallback (no LLM, prepare-only) ===")
+    no_signal_task = {"id": "live2", "chat_id": 2, "description": "hi there"}
+    ctx2, _messages2, _cap2 = agent._prepare_task_context(no_signal_task)
+    names2 = {s["function"]["name"] for s in agent.tools.schemas()}
+    from ouroboros.smart_router import ALWAYS_ON_TOOLS, TASK_TYPE_SIMPLE, TOOL_SETS
+    print("branch:", ctx2.harness_branch.name, "(expect main — neutral fallback)")
+    print("envelope size:", len(names2), "| conservative simple set:",
+          names2 <= (TOOL_SETS[TASK_TYPE_SIMPLE] | ALWAYS_ON_TOOLS))
 
 
 if __name__ == "__main__":

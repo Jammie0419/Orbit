@@ -1,5 +1,5 @@
 {
-  "description": "Coding branch: prefer identity/world (project context) over dialogue; scratchpad first.",
+  "description": "Coding branch memory injection: scratchpad (working set) first, project context (identity/world) next, dialogue last.",
   "priority": ["scratchpad", "identity", "environment profile", "dialogue"],
   "exclude": [],
   "max_sections": 4

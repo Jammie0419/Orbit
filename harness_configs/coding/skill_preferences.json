@@ -1,8 +1,10 @@
 {
-  "description": "Coding branch skill bias: boost dev/engineering skills by name or tag.",
+  "description": "Coding branch skill bias: boost dev/engineering skills; demote research/web skills so they stay under the recommendation bar.",
   "boost": {
     "unix_computer_use": 0.2
   },
   "tags": ["code", "test", "build", "git", "python"],
-  "always": []
+  "always": [],
+  "demote": [],
+  "demote_tags": ["research", "web", "browse"]
 }

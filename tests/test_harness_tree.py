@@ -12,9 +12,10 @@ import pathlib
 
 import pytest
 
-from ouroboros.harness_tree import HarnessTree
+from ouroboros.harness_tree import HarnessTree, SkillPreferences
 from ouroboros.smart_router import (
     TASK_TYPE_CODING,
+    TASK_TYPE_KNOWLEDGE,
     TASK_TYPE_SIMPLE,
     SmartRouter,
 )
@@ -25,19 +26,26 @@ def _write_branch(
     name: str,
     *,
     prompt_extra: str = "",
+    anti_patterns: str = "",
     memory_config: dict | None = None,
     skill_preferences: dict | None = None,
+    tool_preferences: dict | None = None,
 ) -> pathlib.Path:
     branch_dir = config_dir / name
     branch_dir.mkdir(parents=True, exist_ok=True)
     if prompt_extra:
         (branch_dir / "system_prompt_extra.md").write_text(prompt_extra, encoding="utf-8")
+    if anti_patterns:
+        (branch_dir / "anti_patterns.md").write_text(anti_patterns, encoding="utf-8")
     if memory_config is not None:
         (branch_dir / "memory_config.json").write_text(
             json.dumps(memory_config), encoding="utf-8")
     if skill_preferences is not None:
         (branch_dir / "skill_preferences.json").write_text(
             json.dumps(skill_preferences), encoding="utf-8")
+    if tool_preferences is not None:
+        (branch_dir / "tool_preferences.json").write_text(
+            json.dumps(tool_preferences), encoding="utf-8")
     return branch_dir
 
 
@@ -327,6 +335,10 @@ def test_agent_unclassified_task_lands_on_main(tmp_path, monkeypatch):
     drive = tmp_path / "drive"
     drive.mkdir()
 
+    # Routing must be ON for the classification -> branch chain to run; with
+    # routing OFF the whole block is skipped and no branch is attached (the
+    # flag is consumed from the environment at task time).
+    monkeypatch.setenv("OUROBOROS_SMART_ROUTING", "true")
     monkeypatch.setattr(OuroborosAgent, "_log_worker_boot_once", lambda self: None)
     agent = OuroborosAgent(Env(repo_dir=repo, drive_root=drive))
     captured = {}
@@ -342,3 +354,252 @@ def test_agent_unclassified_task_lands_on_main(tmp_path, monkeypatch):
 
     assert ctx.harness_branch is not None
     assert ctx.harness_branch.is_main
+
+
+def test_agent_signal_less_task_lands_on_neutral_main(tmp_path, monkeypatch):
+    """无信号任务: harness 走 main (中性兜底), 即使 simple 分支存在——simple 只
+    服务显式轻量任务; 工具信封仍按保守 simple 集, 路由/技能推荐照常。"""
+    from ouroboros.agent import Env, OuroborosAgent
+    from ouroboros.smart_router import ALWAYS_ON_TOOLS, TOOL_SETS, TASK_TYPE_SIMPLE
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "prompts").mkdir(parents=True)
+    (repo / "prompts" / "SYSTEM.md").write_text("You are Ouroboros.", encoding="utf-8")
+    # simple 分支存在——证明无信号任务不走它
+    (repo / "harness_configs" / "simple").mkdir(parents=True)
+    (repo / "harness_configs" / "simple" / "system_prompt_extra.md").write_text(
+        "## Simple Task Focus\nminimal answer", encoding="utf-8")
+    drive = tmp_path / "drive"
+    drive.mkdir()
+
+    monkeypatch.setenv("OUROBOROS_SMART_ROUTING", "true")
+    monkeypatch.setattr(OuroborosAgent, "_log_worker_boot_once", lambda self: None)
+
+    agent = OuroborosAgent(Env(repo_dir=repo, drive_root=drive))
+
+    def _fake_build_llm_messages(**kwargs):
+        return [], {}
+
+    monkeypatch.setattr("ouroboros.agent.build_llm_messages", _fake_build_llm_messages)
+
+    # 无任何信号的任务: type 缺、无 workspace、描述无关键词
+    task = {"id": "h4", "chat_id": 1, "description": "hi there"}
+    ctx, _messages, _cap = agent._prepare_task_context(task)
+    assert ctx.harness_branch.is_main
+    # 智能路由仍在: 保守 simple 信封 (加常驻 meta 工具), 且不包含 simple 分支的调整
+    filt = agent.tools._router_filter
+    assert filt is not None
+    assert filt <= (TOOL_SETS[TASK_TYPE_SIMPLE] | ALWAYS_ON_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# L2 harness: tool preferences (avoid), anti-patterns, demote, robustness
+# ---------------------------------------------------------------------------
+
+
+def test_tool_preferences_avoid_narrows_envelope(tmp_path):
+    """avoid 只剔除 TOOL_SETS 内的、非控制面的工具；未知名称被丢弃。"""
+    from ouroboros.smart_router import TOOL_SETS
+
+    cfg = _config_dir(tmp_path)
+    _write_branch(cfg, "knowledge", tool_preferences={
+        "avoid": ["web_search", "enable_tools", "nonexistent_tool"],
+    })
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_KNOWLEDGE)
+    avoided = branch.avoided_tools()
+    assert "web_search" in avoided
+    assert "enable_tools" not in avoided  # control plane can never be avoided
+    assert "nonexistent_tool" not in avoided  # unknown names are dropped
+    assert avoided <= TOOL_SETS[TASK_TYPE_KNOWLEDGE]
+    # A branch with no tool config avoids nothing.
+    main = tree.select_branch("research")
+    assert main.avoided_tools() == frozenset()
+
+
+def test_agent_applies_avoid_tools_to_round_one_envelope(tmp_path, monkeypatch):
+    """端到端：knowledge 分支 avoid web_search → 该工具不在 round-one 信封。"""
+    from ouroboros.agent import Env, OuroborosAgent
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "prompts").mkdir(parents=True)
+    (repo / "prompts" / "SYSTEM.md").write_text("You are Ouroboros.", encoding="utf-8")
+    (repo / "harness_configs" / "knowledge").mkdir(parents=True)
+    (repo / "harness_configs" / "knowledge" / "tool_preferences.json").write_text(
+        json.dumps({"avoid": ["web_search"]}), encoding="utf-8")
+    drive = tmp_path / "drive"
+    drive.mkdir()
+
+    monkeypatch.setenv("OUROBOROS_SMART_ROUTING", "true")
+    monkeypatch.setattr(OuroborosAgent, "_log_worker_boot_once", lambda self: None)
+
+    agent = OuroborosAgent(Env(repo_dir=repo, drive_root=drive))
+
+    def _fake_build_llm_messages(**kwargs):
+        return [], {}
+
+    monkeypatch.setattr("ouroboros.agent.build_llm_messages", _fake_build_llm_messages)
+
+    task = {"id": "h3", "chat_id": 1, "type": "knowledge", "description": "remember something"}
+    ctx, _messages, _cap = agent._prepare_task_context(task)
+    assert ctx.harness_branch.name == "knowledge"
+    filt = agent.tools._router_filter
+    assert filt is not None
+    assert "web_search" not in filt
+    # The discovery escape hatch survives the branch-level narrowing.
+    assert "enable_tools" in filt
+
+
+def test_anti_patterns_loaded_with_branch(tmp_path):
+    cfg = _config_dir(tmp_path)
+    _write_branch(cfg, "coding", anti_patterns="- avoid whole-file rewrites")
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_CODING)
+    assert branch.anti_patterns == "- avoid whole-file rewrites"
+    # main carries no anti-patterns.
+    main = tree.select_branch("research")
+    assert main.anti_patterns == ""
+
+
+def test_context_injects_anti_patterns_after_extra(tmp_path):
+    """anti_patterns 渲染为独立 ## Avoid 段，跟在正向 extra 之后。"""
+    from ouroboros.agent import Env
+    from ouroboros.context import _capture_context_core
+    from ouroboros.harness_tree import HarnessBranch
+    from ouroboros.memory import Memory
+    from ouroboros.tools.registry import ToolContext
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "prompts").mkdir(parents=True)
+    (repo / "prompts" / "SYSTEM.md").write_text("BASE SYSTEM", encoding="utf-8")
+    (repo / "BIBLE.md").write_text("BIBLE", encoding="utf-8")
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "ARCHITECTURE.md").write_text("ARC", encoding="utf-8")
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    env = Env(repo_dir=repo, drive_root=drive)
+    memory = Memory(drive_root=drive, repo_dir=repo)
+    memory.ensure_files()
+
+    ctx = ToolContext(repo_dir=repo, drive_root=drive)
+    ctx.harness_branch = HarnessBranch(
+        name="coding",
+        task_type="coding",
+        system_prompt_extra="## Coding Task Focus\nplan first",
+        anti_patterns="- never whole-file rewrite",
+    )
+
+    core = _capture_context_core(env, memory, {}, None, ctx)
+    assert "BASE SYSTEM" in core.base_prompt
+    assert "## Coding Task Focus" in core.base_prompt
+    assert "## Avoid (coding branch)" in core.base_prompt
+    assert "- never whole-file rewrite" in core.base_prompt
+
+
+def test_skill_preferences_boost_and_demote_together(tmp_path):
+    """demote 把技能压到 0.6 阈值以下推出推荐；boost 仍可把另一个技能抬进来。"""
+    drive = tmp_path / "drive"
+    _write_skill(drive, "web-scraper", tags="web, research")
+    _write_skill(drive, "git-cleanup", tags="git, code")
+    cfg = _config_dir(tmp_path)
+    _write_branch(
+        cfg, "knowledge",
+        skill_preferences={
+            "boost": {"git-cleanup": 0.3},
+            "demote": ["web-scraper"],
+            "demote_tags": ["research"],
+        },
+    )
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_KNOWLEDGE)
+    router = SmartRouter(drive)
+    result = router.route(
+        {"type": "api_task", "workspace_root": "C:/p"},
+        available=set(),
+        task_type=TASK_TYPE_KNOWLEDGE,
+        skill_preferences=branch.skill_preferences,
+        branch=branch.name,
+    )
+    ranked = dict(result.skill_rankings)
+    assert "web-scraper" not in ranked  # demoted below the 0.6 threshold
+    assert "git-cleanup" in ranked  # boosted back above it
+
+
+def test_demote_removes_even_full_relevance_skill(tmp_path):
+    """满配技能 (所有字段命中, score 1.0) + 具名 demote → 0.5 < 0.6, 必然出局
+    (DEMOTE_SKILL_PENALTY=0.5 大于任何正向增量组合的最大值 0.5)。"""
+    drive = tmp_path / "drive"
+    _write_skill(drive, "git-automation", tags="code, python, build, git")
+    cfg = _config_dir(tmp_path)
+    _write_branch(cfg, "coding", skill_preferences={"demote": ["git-automation"]})
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_CODING)
+    router = SmartRouter(drive)
+    result = router.route(
+        {"type": "api_task", "workspace_root": "C:/p"},
+        available=set(),
+        task_type=TASK_TYPE_CODING,
+        skill_preferences=branch.skill_preferences,
+        branch=branch.name,
+    )
+    assert "git-automation" not in dict(result.skill_rankings)
+
+
+def test_non_numeric_boost_value_is_skipped(tmp_path):
+    """一个坏 boost 值不毒化整个分支加载。"""
+    cfg = _config_dir(tmp_path)
+    _write_branch(cfg, "coding", skill_preferences={
+        "boost": {"good": 0.2, "bad": "not-a-number"},
+    })
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_CODING)
+    assert branch.skill_preferences.boost == {"good": 0.2}
+
+
+def test_broken_skill_preferences_json_does_not_kill_branch(tmp_path):
+    """skill_preferences 整体解析失败 → 空偏好，分支其余配置不受影响。"""
+    cfg = _config_dir(tmp_path)
+    branch_dir = _write_branch(
+        cfg, "coding",
+        prompt_extra="## Coding\nx",
+        skill_preferences={"boost": {"x": 0.2}},
+    )
+    (branch_dir / "skill_preferences.json").write_text("[1,2,3]", encoding="utf-8")
+    tree = HarnessTree(cfg)
+    branch = tree.select_branch(TASK_TYPE_CODING)
+    assert branch.name == "coding"
+    assert branch.skill_preferences.is_empty
+    assert branch.system_prompt_extra  # other config survives
+
+
+def test_skill_preferences_is_empty_covers_new_fields():
+    prefs = SkillPreferences()
+    assert prefs.is_empty
+    prefs.demote.append("x")
+    assert not prefs.is_empty
+    prefs = SkillPreferences()
+    prefs.demote_tags.append("web")
+    assert not prefs.is_empty
+
+
+def test_registry_config_only_filters_explicit_mentions():
+    """registry digest 过滤：只有显式提及 "memory registry" 的分支才有话语权。"""
+    from ouroboros.context import _apply_harness_registry_config
+    from ouroboros.harness_tree import MemoryConfig
+
+    digest = "## Memory Registry\nregistry digest text"
+    # Branch that never mentions registry: digest passes through unchanged.
+    assert _apply_harness_registry_config(digest, MemoryConfig(priority=["scratchpad", "identity"], exclude=["dialogue"])) == digest
+    # Exclude mentions registry: digest dropped (simple branch intent).
+    assert _apply_harness_registry_config(digest, MemoryConfig(exclude=["dialogue", "memory registry"])) == ""
+    # Include mentions registry: digest kept.
+    assert _apply_harness_registry_config(digest, MemoryConfig(include=["memory registry"])) == digest
+    # Include that never mentions registry: the branch has no opinion on the
+    # registry digest, so it passes through unchanged (default behavior).
+    assert _apply_harness_registry_config(digest, MemoryConfig(include=["scratchpad"])) == digest
+    # No config / empty digest: unaffected.
+    assert _apply_harness_registry_config(digest, None) == digest
+    assert _apply_harness_registry_config("", MemoryConfig(include=["memory registry"])) == ""

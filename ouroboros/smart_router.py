@@ -41,6 +41,14 @@ DEFAULT_TOP_K_SKILLS = 10
 # A plain base-score skill is by definition "no signal" and stays unranked.
 DEFAULT_SKILL_SCORE_THRESHOLD = 0.6
 
+# Negative skill preferences (harness 不足 3, L2): a demoted skill/tag must
+# fall below the recommendation threshold for EVERY relevance combination.
+# The named penalty is 0.5 — larger than any positive delta (max +0.5:
+# tags +0.3 + name +0.2 + text +0.2 capped) — so even a full-relevance 1.0
+# skill lands at 0.5 < 0.6 and only ``always`` can still pin it.
+DEMOTE_SKILL_PENALTY = 0.5
+DEMOTE_TAG_PENALTY = 0.2
+
 # Tool names that are NEVER hidden by routing. These are the control plane
 # (task-tree coordination, model switching, owner communication) and the
 # discovery escape hatch itself: the model can always enumerate and enable
@@ -68,6 +76,14 @@ TOOL_SETS: Dict[str, frozenset] = {
         "plan_task", "verify_and_record", "codebase_health", "review_status",
         "schedule_subagent", "compare_subagent_patches", "integrate_subagent_patch",
         "integrate_delegated_patch",
+        # Computer-operation tasks (install/desktop/automation) execute through
+        # skills — the coding envelope must carry the skill surface (2026-09-02).
+        "list_skills", "skill_exec",
+        # Engineering verification surface (2026-09-02): CI runs, acceptance
+        # review and deep self-review are explicit coding-loop stages; visual
+        # debugging (screenshots of a broken UI) belongs to coding tasks too.
+        "run_ci_tests", "task_acceptance_review", "request_deep_self_review",
+        "view_image", "analyze_screenshot",
         "recent_tasks", "chat_history", "journal_read", "journal_write",
     }),
     TASK_TYPE_RESEARCH: frozenset({
@@ -76,6 +92,11 @@ TOOL_SETS: Dict[str, frozenset] = {
         "read_file", "list_files", "search_code", "query_code",
         "knowledge_read", "knowledge_list",
         "chat_history", "recent_tasks", "workpad_read", "workpad_write",
+        # Writing/analysis surface (2026-09-02): long-form writing tasks live
+        # here — skills can assist (list_skills/skill_exec), video analysis
+        # pairs with youtube_transcript, journal is the research log.
+        "extract_video_frames", "list_skills", "skill_exec",
+        "journal_read", "journal_write",
     }),
     TASK_TYPE_KNOWLEDGE: frozenset({
         "knowledge_read", "knowledge_write", "knowledge_list",
@@ -85,6 +106,10 @@ TOOL_SETS: Dict[str, frozenset] = {
         "list_skills", "skill_exec", "skill_review", "skill_preflight",
         "toggle_skill", "submit_skill_to_hub",
         "chat_history", "recent_tasks", "web_search",
+        # Lifecycle surface (2026-09-02): promote_to_stable graduates a
+        # curated entry into the durable stable set — the natural end of a
+        # knowledge-curation workflow.
+        "promote_to_stable",
     }),
     TASK_TYPE_SIMPLE: frozenset({
         "chat_history", "recent_tasks",
@@ -99,7 +124,11 @@ TOOL_SETS: Dict[str, frozenset] = {
 # score a little; specificity comes from matching across several fields.
 SKILL_TAG_MAPPING: Dict[str, Tuple[str, ...]] = {
     TASK_TYPE_CODING: ("code", "coding", "program", "develop", "debug", "test",
-                       "build", "git", "python", "shell", "refactor", "api"),
+                       "build", "git", "python", "shell", "refactor", "api",
+                       # Computer-operation surface (2026-09-02): desktop/automation
+                       # skills like unix_computer_use must score against coding
+                       # tasks (name/description hits) *without* an explicit boost.
+                       "computer", "desktop", "automate", "install"),
     TASK_TYPE_RESEARCH: ("search", "research", "web", "browse", "analyz", "investigat",
                          "explore", "summariz", "extract", "report", "data"),
     TASK_TYPE_KNOWLEDGE: ("memory", "knowledge", "learn", "note", "index", "recall",
@@ -191,32 +220,65 @@ class TaskClassifier:
                              "compare", "web", "look up", "lookup",
                              # 中文用户: 调研 / 搜索 / 查找 / 总结 / 分析 / 论文 / 资料
                              "调研", "搜索", "查找", "查询", "总结", "分析", "研究",
-                             "论文", "资料", "最新"),
+                             "论文", "资料", "最新",
+                             # 内容写作形态 (2026-09-02): 写文档/文章/周报 = 综合素材 +
+                             # 沉淀产出, 工具面 (web + workpad + knowledge) 在 research。
+                             "文档", "文章", "报告", "周报", "写作", "撰写", "整理成",
+                             # 检索综合形态 (2026-09-02): 对比/收集/调查/翻译都是
+                             # 多源综合的信号词。
+                             "对比", "收集", "调查", "翻译"),
         TASK_TYPE_KNOWLEDGE: ("remember", "memory", "knowledge", "note", "record",
                               "save for later", "store", "learn",
                               # 中文用户: 记住 / 存储 / 知识 / 笔记 / 长期记忆 / 保存
                               "记住", "存储", "保存", "知识", "笔记", "记忆",
-                              "长期记忆", "学习记录", "归档"),
+                              "长期记忆", "学习记录", "归档",
+                              # 记忆回顾形态 (2026-09-02): 回顾/收藏/记一下是对
+                              # 内部语料的读写信号, 区别于"整理成文档"的写作形态。
+                              "回顾", "收藏", "记一下", "记一个"),
         TASK_TYPE_CODING: ("bug", "fix", "code", "implement", "refactor", "build",
                            "debug", "test", "write a", "program", "python", "function",
                            # 中文用户: 代码 / 写 / 实现 / 修复 / 重构 / 函数 / 模块 / 程序
                            "代码", "编写", "实现", "修复", "重构", "函数", "模块",
-                           "程序", "脚本", "调试", "报错", "功能", "写一个"),
+                           "程序", "脚本", "调试", "报错", "功能", "写一个",
+                           # 电脑/系统操作形态 (2026-09-02): 安装软件、桌面操作等
+                           # 落到 coding 分支 — 执行面 (run_command/skill_exec) 在此。
+                           "安装", "软件", "电脑", "桌面", "装一个",
+                           # 工程生命周期形态 (2026-09-02): 部署/配置/发布/接口/测试
+                           # 都是编码工作流的高信号词。
+                           "部署", "配置", "发布", "接口", "测试"),
     }
 
     def classify(self, task: Dict[str, Any]) -> str:
+        """Classify a task into one of the four task types (never raises).
+
+        Falls back to ``simple`` when no signal points at any form; the
+        harness tree distinguishes "explicit simple" from "unknown task" via
+        :meth:`classify_with_signal`.
+        """
+        return self.classify_with_signal(task)[0]
+
+    def classify_with_signal(self, task: Dict[str, Any]) -> Tuple[str, bool]:
+        """Return ``(task_type, has_signal)``.
+
+        ``has_signal`` is True when ANY evidence points at a task form
+        (explicit type hint / bound workspace / memory mode / keyword hit) and
+        False when NOTHING does. The harness tree treats signal-less tasks as
+        "unknown" and selects the neutral ``main`` branch instead of asserting
+        a form — an unclassified request must not inherit the ``simple``
+        branch's lightweight-answer assumptions.
+        """
         raw_type = str(task.get("type") or "").strip().lower()
         task_type = self._TYPE_HINTS.get(raw_type)
         if task_type is not None:
-            return task_type
+            return task_type, True
 
         workspace = str(task.get("workspace_root") or "").strip()
         if workspace:
-            return TASK_TYPE_CODING
+            return TASK_TYPE_CODING, True
 
         memory_mode = str(task.get("memory_mode") or "").strip().lower()
         if memory_mode in {"knowledge", "memory"}:
-            return TASK_TYPE_KNOWLEDGE
+            return TASK_TYPE_KNOWLEDGE, True
 
         # Chat turns carry the user's words in ``text`` (no description field);
         # tasks enqueued by the supervisor may carry either. Scan both so a
@@ -228,9 +290,9 @@ class TaskClassifier:
         if haystack:
             for candidate, keywords in self._DESCRIPTION_KEYWORDS.items():
                 if any(keyword in haystack for keyword in keywords):
-                    return candidate
+                    return candidate, True
 
-        return TASK_TYPE_SIMPLE
+        return TASK_TYPE_SIMPLE, False
 
 
 class SmartRouter:
@@ -385,24 +447,33 @@ class SmartRouter:
     def _normalize_preferences(skill_preferences: Optional[Any]) -> Dict[str, Any]:
         """Coerce a harness SkillPreferences (or plain dict) into a lookup shape."""
         if skill_preferences is None:
-            return {"boost": {}, "tags": set(), "always": set()}
+            return {"boost": {}, "tags": set(), "always": set(),
+                    "demote": set(), "demote_tags": set()}
         if hasattr(skill_preferences, "boost"):
             return {
                 "boost": dict(skill_preferences.boost or {}),
                 "tags": {str(t) for t in (skill_preferences.tags or [])},
                 "always": {str(name) for name in (skill_preferences.always or [])},
+                "demote": {str(name) for name in (skill_preferences.demote or [])},
+                "demote_tags": {str(t) for t in (skill_preferences.demote_tags or [])},
             }
         raw = dict(skill_preferences)
         return {
             "boost": {str(k): float(v) for k, v in dict(raw.get("boost") or {}).items()},
             "tags": {str(t) for t in (raw.get("tags") or [])},
             "always": {str(name) for name in (raw.get("always") or [])},
+            "demote": {str(name) for name in (raw.get("demote") or [])},
+            "demote_tags": {str(t) for t in (raw.get("demote_tags") or [])},
         }
 
     def _apply_skill_preferences(self, skill: Any, score: float, prefs: Dict[str, Any]) -> float:
-        """Branch bias on top of generic relevance: named boost + tag boost."""
-        boosted = score + prefs["boost"].get(str(getattr(skill, "name", "") or ""), 0.0)
-        if prefs["tags"]:
+        """Branch bias on top of generic relevance: named boost + tag boost,
+        minus named demote + tag demote (negative preferences, L2 harness)."""
+        name = str(getattr(skill, "name", "") or "")
+        boosted = score + prefs["boost"].get(name, 0.0)
+        if prefs["demote"] and name in prefs["demote"]:
+            boosted -= DEMOTE_SKILL_PENALTY
+        if prefs["tags"] or prefs["demote_tags"]:
             manifest = getattr(skill, "manifest", None)
             try:
                 raw_tags = getattr(manifest, "raw_extra", {}).get("tags", [])
@@ -411,6 +482,8 @@ class SmartRouter:
             skill_tags = {tag.lower() for tag in _flatten_tags(raw_tags)}
             if skill_tags & prefs["tags"]:
                 boosted += 0.15
+            if skill_tags & prefs["demote_tags"]:
+                boosted -= DEMOTE_TAG_PENALTY
         return min(1.0, boosted)
 
     @staticmethod

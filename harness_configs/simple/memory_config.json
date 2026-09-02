@@ -1,5 +1,5 @@
 {
-  "description": "Simple branch: dialogue continuity only; drop heavy memory sections.",
+  "description": "Simple branch memory injection: dialogue continuity only; registry digest and environment profile dropped (exclude is now enforced on the registry digest).",
   "priority": ["dialogue"],
   "exclude": ["environment profile", "memory registry"],
   "max_sections": 1

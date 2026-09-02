@@ -1,6 +1,8 @@
 {
-  "description": "Simple branch skill bias: no skill bias for trivial turns.",
+  "description": "Simple branch skill bias: none — trivial turns should not spawn skill recommendations (is_empty keeps the recommendation block clean).",
   "boost": {},
   "tags": [],
-  "always": []
+  "always": [],
+  "demote": [],
+  "demote_tags": []
 }

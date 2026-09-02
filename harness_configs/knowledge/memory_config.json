@@ -1,5 +1,5 @@
 {
-  "description": "Knowledge branch: registry + identity first (the index and the curating identity), scratchpad next.",
+  "description": "Knowledge branch memory injection: registry digest first (the index), identity next, scratchpad third; dialogue excluded entirely.",
   "priority": ["memory registry", "identity", "scratchpad"],
   "exclude": ["dialogue"],
   "max_sections": 3

@@ -1,6 +1,8 @@
 {
-  "description": "Knowledge branch skill bias: boost memory/knowledge skills.",
+  "description": "Knowledge branch skill bias: boost memory/knowledge skills; demote web/browse skills — curation works the internal corpus, not the web.",
   "boost": {},
   "tags": ["memory", "knowledge", "index", "note"],
-  "always": []
+  "always": [],
+  "demote": [],
+  "demote_tags": ["web", "browse", "research"]
 }

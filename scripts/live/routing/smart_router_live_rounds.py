@@ -65,9 +65,10 @@ def main() -> None:
     from ouroboros.config import load_settings
 
     settings = load_settings()
-    os.environ["OPENAI_COMPATIBLE_API_KEY"] = str(settings.get("OPENAI_COMPATIBLE_API_KEY") or "").strip()
-    os.environ["OPENAI_COMPATIBLE_BASE_URL"] = str(settings.get("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
-    os.environ["OUROBOROS_MODEL"] = str(settings.get("OUROBOROS_MODEL") or "").strip()
+    for _k in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL", "OUROBOROS_MODEL"):
+        _v = str(settings.get(_k) or "").strip()
+        if _v:
+            os.environ[_k] = _v  # settings.json wins only when non-empty; .env-provided values stay
     if not os.environ["OPENAI_COMPATIBLE_API_KEY"]:
         raise SystemExit("OPENAI_COMPATIBLE_API_KEY not configured in settings.json; sync .env first")
     for _k in ("OUROBOROS_REVIEW_MODELS", "OUROBOROS_SCOPE_REVIEW_MODEL",
