@@ -745,6 +745,10 @@ def _make_timeout_result(
         "ts": utc_now_iso(), "type": "tool_call", "tool": fn_name,
         "task_id": task_id,
         "args": args_for_log, "result_preview": result,
+        # A timeout IS an error: consumers (reflection trace reconstruction,
+        # tool error counting) previously misread this row as success because
+        # is_error/status were absent (extract_evolution_corpus relies on both).
+        "is_error": True, "status": "timeout",
         "result_ref": trace_ref.get("manifest_ref") if trace_ref else None,
     }, corr, tool_call_id=tool_call_id))
 

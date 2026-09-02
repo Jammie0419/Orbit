@@ -39,17 +39,18 @@ GAIA 语料（正确+错误混合，存档）─┬──▶ V0（任务层关 �
 ### 1.2 存档格式（语料 JSONL）
 
 ```jsonl
-{"id": "2023_level1:7", "level": 1, "task": "...", "file_name": "...", "outcome": {"passed": true, "final_answer": "...", "reason_code": ""}, "trace_ref": "bench_runs/gaia_results/<sample>/logs/tools.jsonl"}
-{"id": "2023_level2:13", "level": 2, "task": "...", "file_name": null, "outcome": {"passed": false, "final_answer": "...", "reason_code": "REVIEW_BLOCKED"}, "trace_ref": "bench_runs/gaia_results/<sample>/trace.json"}
-{"id": "2023_level3:5", "level": 3, "task": "...", "file_name": "...", "outcome": {"passed": true, "final_answer": "...", "reason_code": ""}, "trace_ref": "bench_runs/gaia_results/<sample>/logs/tools.jsonl"}
+{"id": "2023_level1:7", "level": 1, "task": "...", "file_name": "...", "outcome": {"passed": true, "final_answer": "...", "reason_code": ""}, "cost": {"total_rounds": 15, "cost_usd": null}, "trace_ref": "traces/2023_level1_7.json", "uuid": "...", "target": "...", "started_at": "..."}
+{"id": "2023_level2:13", "level": 2, "task": "...", "file_name": null, "outcome": {"passed": false, "final_answer": "...", "reason_code": "REVIEW_BLOCKED"}, "cost": {"total_rounds": 42, "prompt_tokens": 1234567}, "trace_ref": "traces/2023_level2_13.json", "uuid": "...", "target": "...", "started_at": "..."}
+{"id": "2023_level3:5", "level": 3, "task": "...", "file_name": "...", "outcome": {"passed": true, "final_answer": "...", "reason_code": ""}, "cost": {"total_rounds": 60}, "trace_ref": "traces/2023_level3_5.json", "uuid": "...", "target": "...", "started_at": "..."}
 ```
 
 字段说明：
-- `id`：GAIA 实例定位（level + 序号，与 `run_gaia.py` 的 sample-id 格式一致：`f"{subset}:level{level}:{idx}"`）。
-- `task`：任务指令原文（若实例带附件 `file_name`，从对应文件读取内容一并记录）。
+- `id`：GAIA 实例定位（level + 序号，与 `run_gaia.py` 的 sample-id 格式一致：`f"{subset}:level{level}:{idx}"`）。**id 含冒号用于定位；trace/backup 文件名用安全形式**（`trace_safe_id`：冒号 → 下划线，避免 NTFS ADS / Linux 非法路径）。
+- `task`：任务指令原文（若实例带附件 `file_name`，文本类附件内容并入 task（≤3000 字符），二进制附件仅记名——反思需要看到题目形态）。
 - `outcome`：pass/fail + final_answer + reason_code（**失败任务的错误标记是反思触发的前提**，必须如实记录）。
-- `trace_ref`：该实例的执行轨迹记录路径（见 §1.4 转换）。
-- **存档位置**：`bench_runs/evolution_corpus/gaia_corpus_2026-08-28.jsonl`（随实验记录归档，作为可复现性的一部分）。
+- `cost`（可选）：task_results 持久化的成本视图（total_rounds/cost_usd/tokens），回放驱动据此组装 `usage_dict` → 反思条目 round/cost 不再为 0/None，NONTRIVIAL 反思分支可触发。
+- `trace_ref`：该实例的执行轨迹记录路径，**相对语料目录**（`load_trace_from_path` 按 JSONL 所在目录解析，跨机可移植）。
+- **存档位置**：`bench_runs/evolution_corpus/gaia_corpus_2026-08-28.jsonl`（随实验记录归档，作为可复现性的一部分）。同一目录含 `traces/<safe_id>.json`（生产级语义轨迹）与 `backups/<safe_id>/`（原始数据备份：tools.jsonl + task_result.json + 引用的 observability manifests/blobs，blob 按 sha256 内容定址存入共享池 `backups/_shared_blobs/`）。
 
 ### 1.3 与评估切片不相交确认
 
@@ -62,9 +63,10 @@ GAIA 语料（正确+错误混合，存档）─┬──▶ V0（任务层关 �
 
 | 管道输入 | 来源字段 |
 |---------|---------|
-| `task` | 实例题目文本 + id + level |
-| `trace` | 运行轨迹（工具调用序列 + 结果 + 错误标记）；若为 Ouroboros 标准 `logs/tools.jsonl` 则零转换；若为自定义轨迹 JSON 则脚本映射到 {tool_name, args, result, is_error} |
+| `task` | 实例题目文本 + id + level（文本类附件内容并入） |
+| `trace` | **生产级重建轨迹**：`tools.jsonl` 调用序列 + observability 全量 payload（完整工具结果/result_meta）+ llm_response blob 的轮次文本 → 逐字段对齐生产 `llm_trace`（§10.6） |
 | `outcome` | pass/fail + final_answer + reason_code |
+| `cost` | task_results 持久化的 total_rounds/cost_usd/tokens（→ usage_dict） |
 
 转换产物即 §1.2 语料 JSONL（`trace_ref` 指向轨迹记录）。回放器按会话顺序对每条记录调用 post-task 管道（反思 → 记忆动作/backlog → maybe_promote），产生的进化请求由各会话 supervisor 空闲 tick 执行战役——**GAIA 任务本身不再执行**。
 
@@ -535,38 +537,70 @@ wc -l bench_runs/evolution/<arm>/data/memory/knowledge/improvement-backlog.md
 
 ### 10.6 轨迹映射（离线回放必需）
 
-语料的 `trace_ref` 指向的记录 → 需映射成 `generate_reflection` 需要的 `llm_trace` 结构：
+`extract_evolution_corpus.py` 产出的 trace 文件是与生产 `llm_trace` 逐字段对齐的**生产级语义轨迹**（spec §10.6 form b），`load_trace_from_path` 原样返回即可：
+
+```json
+{
+  "tool_calls": [
+    {"tool": "web_search", "tool_call_id": "fc_...", "args": {"query": "..."},
+     "result": "<agent 视角截断视图（loop_tool_execution._truncate_tool_result）>",
+     "is_error": false, "status": "ok", "trace_ref": {"path": "...", "call_id": "...", "sha256": "..."}}
+  ],
+  "reasoning_notes": ["<每轮无工具调用的纯文本回复（llm_response blob 重建，对齐 loop._handle_text_response）>"],
+  "trace_summary": "<task_results 持久化的生产 build_trace_summary 原文>",
+  "meta": {
+    "usage": {"total_rounds": 15, "cost_usd": null, "prompt_tokens": ..., "completion_tokens": ...},
+    "reconstruction": {"tool_calls_source": "observability_blobs", "notes_source": "llm_response_blobs",
+                       "summary_source": "task_result", ...},
+    "task_id": "<hex>", "uuid": "...", "level": 1, "id": "2023_level1:7",
+    "review_evidence": {...}   // 非空时原样携带（生产 review_state dict）
+  }
+}
+```
+
+重建要点：
+- **完整工具结果**来自 observability 全量 payload（`observability/blobs/<sha256>.json.gz`，内容定址、仅 secret 脱敏），经 per-task `tools.jsonl` 的 `result_ref`（manifest）定位；结果再经生产 `_truncate_tool_result` 截断为 agent 视角。manifest/blob 里记录的 path 是生成机绝对路径，跨机拷贝后失效——索引以 sha256/call_id 为 key，与路径无关。
+- **result_meta**（status/exit_code/signal/artifact_registered）按生产 `_extract_result_metadata` 语义从完整结果重建；TOOL_TIMEOUT 文本兜底识别（旧版日志该行无 is_error/status，生产 v6.90 起已补）。
+- **reasoning_notes**：per-task `events.jsonl` 的 `llm_round` 行（时间序、带 response_ref）→ llm_response blob 的 `message.content`，仅收无 `tool_calls` 的轮（与 `_handle_text_response` 语义一致）。
+- **trace_summary**：优先 `task_results/<hex>.json` 里生产持久化的原文；缺失才本地合成。
+- 无 observability 的旧 run 自动降级（tools.jsonl 的 2000 字符 result_preview），`meta.reconstruction` 如实标注。
 
 ```python
-def load_trace_from_path(trace_ref: str) -> dict:
-    """trace_ref 是语料里每条记录的轨迹文件路径。
+def load_trace_from_path(trace_ref: str, base_dir: Optional[pathlib.Path] = None) -> dict:
+    """trace_ref 是语料里每条记录的轨迹文件路径（相对语料目录）。
+    解析顺序：绝对路径 → base_dir（语料 JSONL 所在目录）→ 仓库根（旧语料兼容）。
     支持两种来源：
-      (a) Ouroboros 标准 tools.jsonl → 直接构造 llm_trace
-      (b) GAIA 适配器自定义轨迹 JSON → 字段映射
+      (a) Ouroboros 标准 tools.jsonl → 逐行构造 llm_trace
+      (b) 生产级轨迹 JSON（含 tool_calls 键）→ 原样返回（含 meta）
     """
     p = pathlib.Path(trace_ref)
+    if not p.is_absolute():
+        p = (base_dir / p) if (base_dir and (base_dir / p).is_file()) else REPO_DIR / p
     data = json.loads(p.read_text(encoding="utf-8"))
 
     if "tool_calls" in data:
-        # 形式 (b)：自定义轨迹（含 tool_calls / result / is_error）
-        return data
+        return data  # 形式 (b)：生产级轨迹，原样进入 generate_reflection
 
-    # 形式 (a)：tools.jsonl 逐行记录
     calls = []
     for line in p.open(encoding="utf-8"):
         rec = json.loads(line)
         calls.append({
             "tool": rec.get("tool") or rec.get("function", {}).get("name"),
             "args": rec.get("args") or rec.get("function", {}).get("arguments", {}),
-            "result": rec.get("result", ""),
+            "result": rec.get("result_preview") or rec.get("result", ""),
             "is_error": bool(rec.get("is_error")),
-            "duration_ms": rec.get("duration_ms", 0),
-            "tokens_used": rec.get("tokens_used", 0),
+            "status": rec.get("status") or ("error" if rec.get("is_error") else "ok"),
         })
     return {"tool_calls": calls, "reasoning_notes": [], "trace_summary": ""}
 ```
 
-**缺失字段的容忍**：`generate_reflection` 对缺失的 `review_evidence` / `child_evidence` / `usage_snapshot_text` / `sealed_final_text` 都给了默认值（`"(none)"` / `""`），所以回放时不必补齐。
+**回放驱动的输入组装**（与生产 emit_task_results → _run_reflection 对齐）：
+- `usage_dict` 从 `meta.usage` 组装（rounds=total_rounds, cost=cost_usd, tokens）——生产传真实 usage，缺了反思条目 rounds/cost 恒为 0/None；
+- `review_evidence` 从 `meta.review_evidence` 取（生产持久化的 review_state dict 原样可用）；
+- `trace_summary` 直接用 trace 里生产持久化的原文；
+- 生产 reflection 出参键是 `memory_actions` / `backlog_candidates` / `reflection`（`MEMORY_ACTIONS_JSON`/`BACKLOG_CANDIDATES_JSON` 只是 prompt 行标记，不在 entry 上）——驱动按此读取并交给 `apply_memory_actions` / `append_backlog_items`。
+
+**缺失字段的容忍**：`generate_reflection` 对缺失的 `child_evidence` / `usage_snapshot_text` / `sealed_final_text` 都给了默认值（`"(none)"` / `""`），回放时不必补齐。
 
 ### 10.7 收尾与快照（每会话）
 
