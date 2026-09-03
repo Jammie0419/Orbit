@@ -189,6 +189,13 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # Optional owner steer appended to each evolution cycle's objective (never
     # overrides the LLM-first promotion). Empty = pure LLM choice.
     "OUROBOROS_EVOLUTION_PERSISTENT_OBJECTIVE": "",
+    # Evolution-layer envelope (PAPER 不足 4 + 5 + 7): trajectory-based experience
+    # learning (credit assignment over task AND evolution-cycle traces) + the
+    # multi-agent planner that turns a promotion into a structured evolution plan
+    # injected into the cycle task text. Default OFF (opt-in): it spends a small
+    # LLM budget on experience extraction and planning. Disabled == exactly the
+    # V4 post-task pipeline behavior today.
+    "OUROBOROS_MULTI_AGENT_EVOLVER": "false",
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5.2",
     # web_search backend pin: auto (default OpenAI-first cascade) | ddgs (pure
     # retrieval, no second LLM — for fixed-model runs) | openai | openrouter | anthropic.
@@ -794,6 +801,14 @@ def get_post_task_evolution_budget_usd() -> float:
     """Optional per-window USD budget for post-task evolution (0 = use the
     existing EVOLUTION_BUDGET_RESERVE / TOTAL_BUDGET gating only)."""
     return _clamped_number_setting("OUROBOROS_POST_TASK_EVOLUTION_BUDGET_USD", low=0.0)
+
+
+def get_multi_agent_evolver_enabled() -> bool:
+    """Whether the evolution layer (PAPER 不足 4+5+7: trajectory experience
+    learning + multi-agent planner) is active. Default OFF (opt-in): it spends
+    LLM budget on experience extraction and planning. Disabled == exactly the
+    V4 post-task pipeline behavior."""
+    return _settings_flag_enabled("OUROBOROS_MULTI_AGENT_EVOLVER")
 
 
 def _bounded_positive_int_setting(key: str, *, default: int, hard_max: int, min_value: int = 1) -> int:

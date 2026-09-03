@@ -10,6 +10,7 @@
 |---|---|---|---|
 | `routing/` | 不足 1 + 不足 8(Unified Smart Router)+ 不足 3(Harness Tree) | `smart_router_live_smoke.py` / `_multi.py` / `_rounds.py` | 分类→分支→工具信封收窄→技能推荐→anti_patterns 注入→真实工具调用→连续会话无 filter 泄漏→无信号任务走 main 中性兜底(2026-09-02)。harness 分支随路由脚本一起覆盖(分支=路由产出,不单独建脚本) |
 | `memory/` | 不足 2(Smart Memory) | `smart_memory_live.py` | 真实 LLM 重要性仲裁、标签提取、按重要性淘汰、标签/重要性检索 |
+| `evolution/` | 不足 4 + 5 + 7(进化层: 轨迹经验学习 + Multi-Agent 规划器) | `evolution_layer_live.py` | 真实 LLM 双轨信用分配(任务轨迹 A + 进化循环轨迹 B)、策略建议、结构化 evolution plan 产物(不做完整 campaign 闭环——那是 run_evolution_arm.py 的领域) |
 
 ## 运行前提
 

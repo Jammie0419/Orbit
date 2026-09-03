@@ -120,6 +120,24 @@ def _loose_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _format_strategy_digest(strategy: Dict[str, Any]) -> str:
+    """Render the evolution-layer strategy digest for the decision prompt."""
+    lines = []
+    sp = strategy.get("success_patterns") or []
+    fp = strategy.get("failure_patterns") or []
+    tools = strategy.get("recommended_tools") or []
+    if sp:
+        lines.append("Success patterns: " + " | ".join(str(x)[:160] for x in sp[:3]))
+    if fp:
+        lines.append("Failure patterns: " + " | ".join(str(x)[:160] for x in fp[:3]))
+    if tools:
+        lines.append("Tools that carried critical steps: " + ", ".join(str(t) for t in tools[:5]))
+    if not lines:
+        return ""
+    lines.append(f"(confidence {strategy.get('confidence')})")
+    return "\n".join(lines)
+
+
 _DECISION_PROMPT = """You decide whether Ouroboros should run ONE reviewed self-improvement (evolution) cycle now, based on the task it just finished and its improvement backlog.
 
 [JUST-FINISHED TASK REFLECTION]
@@ -136,6 +154,9 @@ _DECISION_PROMPT = """You decide whether Ouroboros should run ONE reviewed self-
 
 [ACTIVE CAMPAIGN OBJECTIVE — a reviewed cycle is ALREADY running this; do NOT re-propose it]
 {active_objective}
+
+[EVOLUTION EXPERIENCE — learned patterns from past task/cycle traces; weigh them when choosing the objective]
+{experience_digest}
 
 Return ONLY a JSON object:
 {{"promote": true|false, "objective": "<one concrete, self-contained improvement to Ouroboros's own code/process; empty if not promoting>", "requires_plan_review": true|false, "backlog_id": "<id if this maps to a backlog item, else empty>"}}
@@ -222,7 +243,8 @@ def _active_campaign_objective() -> str:
 
 
 def _decide_promotion(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dict[str, Any]],
-                      llm_client: Any, *, force: bool) -> Optional[Dict[str, Any]]:
+                      llm_client: Any, *, force: bool,
+                      strategy_digest: str = "") -> Optional[Dict[str, Any]]:
     from ouroboros.utils import truncate_review_artifact
 
     drive_root = pathlib.Path(str(env.drive_root))
@@ -250,6 +272,7 @@ def _decide_promotion(env: Any, task: Dict[str, Any], reflection_entry: Optional
         capability=capability or "(no evolution-cycle history yet)",
         closed=closed or "(none)", active_objective=active_objective or "(no active campaign)",
         force_note=force_note,
+        experience_digest=str(strategy_digest or "").strip() or "(no learned patterns yet)",
     )
     try:
         from ouroboros.config import SETTINGS_DEFAULTS
@@ -294,7 +317,8 @@ def _decide_promotion(env: Any, task: Dict[str, Any], reflection_entry: Optional
         return None
 
 
-def _write_request(drive_root: pathlib.Path, decision: Dict[str, Any], task: Dict[str, Any]) -> None:
+def _write_request(drive_root: pathlib.Path, decision: Dict[str, Any], task: Dict[str, Any],
+                   *, evolution_plan: Optional[Dict[str, Any]] = None) -> None:
     from ouroboros.utils import utc_now_iso
 
     req = {
@@ -306,6 +330,12 @@ def _write_request(drive_root: pathlib.Path, decision: Dict[str, Any], task: Dic
         "source": "post_task",
         "origin_task_id": str(task.get("id") or ""),
     }
+    # Evolution-layer plan (PAPER 不足 4+7, OUROBOROS_MULTI_AGENT_EVOLVER): an
+    # OPTIONAL structured plan produced by the worker-side planner. Older
+    # requests (and the disabled switch) never carry it; the supervisor only
+    # reads it when present, so nothing downstream changes without the layer.
+    if evolution_plan:
+        req["evolution_plan"] = evolution_plan
     path = drive_root / _REQUEST_REL
     # Atomic publish: the supervisor polls every tick, so a partial write must
     # never be observable (else it could parse-fail and drop the signal).
@@ -345,12 +375,67 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         force = not cadence.startswith("llm")
         if cadence.startswith("every_n") and not _counter_due(drive_root, _parse_every_n(cadence)):
             return None
-        decision = _decide_promotion(env, task, reflection_entry, llm_client, force=force)
+        # Evolution layer (PAPER 不足 4+5+7, OUROBOROS_MULTI_AGENT_EVOLVER): when
+        # enabled — and ONLY then — extract trajectory experience (A: this task's
+        # trace; B: finished cycle traces via the cursor), feed a strategy digest
+        # into the decision prompt, and attach a structured plan to the request.
+        # Disabled == the exact V4 behavior: nothing below runs, no prompt change.
+        strategy_digest = ""
+        evolution_plan = None
+        task_experience = None
+        _evolver = None
+        try:
+            from ouroboros.config import get_multi_agent_evolver_enabled
+
+            if get_multi_agent_evolver_enabled():
+                from ouroboros.evolution.multi_agent_evolver import MultiAgentEvolver
+                from ouroboros.evolution.trajectory_experience_learner import (
+                    TrajectoryExperienceLearner,
+                )
+
+                learner = TrajectoryExperienceLearner(drive_root, llm_client=llm_client)
+                task_experience = learner.extract_task_experience(
+                    str(task.get("id") or ""), reflection_entry)
+                learner.consume_pending_cycles()
+                strategy = learner.suggest_evolution_strategy(
+                    str((reflection_entry or {}).get("goal") or "")
+                    or str(task.get("description") or "")
+                    or str(task.get("text") or "")
+                )
+                if isinstance(strategy, dict) and strategy.get("strategy") != "standard":
+                    strategy_digest = _format_strategy_digest(strategy)
+                # The planner runs AFTER the decision (it needs the chosen
+                # objective); holding the evolver reference here keeps the
+                # plan builder one import away from the promote path.
+                _evolver = MultiAgentEvolver(drive_root, llm_client=llm_client)
+        except Exception:
+            log.debug("post_task_evolution: evolution layer setup failed", exc_info=True)
+            _evolver = None
+        decision = _decide_promotion(env, task, reflection_entry, llm_client, force=force,
+                                     strategy_digest=strategy_digest)
         if not decision or not decision.get("promote") or not decision.get("objective"):
             return None
-        _write_request(drive_root, decision, task)
-        log.info("post_task_evolution: durable promotion signal written (origin task=%s)",
-                 str(task.get("id") or ""))
+        # Planner: attach the structured evolution plan to the request when the
+        # layer is on. A failed plan degrades to None — the cycle still runs on
+        # the plain objective, exactly like the V4 path.
+        try:
+            if get_multi_agent_evolver_enabled() and _evolver is not None and task_experience is not None:
+                evolution_plan = _evolver.run_evolution_cycle(
+                    steps=list((task_experience or {}).get("steps") or []),
+                    reflection_entry=reflection_entry,
+                    experience=(task_experience or {}).get("overall"),
+                    objective_hint=decision["objective"],
+                    # 失败回环: 历史成功/失败模式 + 关键步骤工具注入规划各阶段,
+                    # 让方案生成避开已知失败路径(与决策 prompt 同一 digest)。
+                    experience_digest=strategy_digest,
+                )
+        except Exception:
+            log.debug("post_task_evolution: evolution planner failed", exc_info=True)
+            evolution_plan = None
+        _write_request(drive_root, decision, task, evolution_plan=evolution_plan)
+        log.info("post_task_evolution: durable promotion signal written (origin task=%s%s)",
+                 str(task.get("id") or ""),
+                 " with evolution_plan" if evolution_plan else "")
         return decision
     except Exception:
         log.debug("post_task_evolution.maybe_promote failed", exc_info=True)
@@ -460,6 +545,19 @@ def apply_pending_request(drive_root: Any) -> bool:
 
                 camp = _read_evolution_campaign()
                 camp["post_task_backlog_id"] = backlog_id
+                _write_evolution_campaign(camp)
+            except Exception:
+                pass
+        # Evolution-layer plan (PAPER 不足 4+7): carry the worker-side planner's
+        # structured plan on the campaign so the cycle task text can consume it.
+        # Absent (disabled layer / older request) == today's behavior.
+        evolution_plan = req.get("evolution_plan")
+        if isinstance(evolution_plan, dict):
+            try:
+                from supervisor.evolution_lifecycle import _read_evolution_campaign, _write_evolution_campaign
+
+                camp = _read_evolution_campaign()
+                camp["evolution_plan"] = evolution_plan
                 _write_evolution_campaign(camp)
             except Exception:
                 pass

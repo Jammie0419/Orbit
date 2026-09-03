@@ -1055,6 +1055,60 @@ def update_evolution_campaign_after_task(
     }
 
 
+def _cycle_lessons_for(objective: str, drive_root: pathlib.Path) -> str:
+    """Assemble Track-B cycle lessons matching the objective TYPE.
+
+    Failures (abandoned/no_op) contribute their LLM-extracted failure factors
+    plus the tools that dragged the cycle down (step credit); absorbed cycles
+    contribute their reusable pattern. Empty when the depot has no matching
+    lessons. Never raises.
+    """
+    try:
+        from ouroboros.evolution.trajectory_experience_learner import (
+            TrajectoryExperienceLearner,
+        )
+    except Exception:
+        return ""
+    try:
+        learner = TrajectoryExperienceLearner(pathlib.Path(drive_root))
+        experiences = learner.load_experiences(kind="cycle")
+    except Exception:
+        return ""
+    if not experiences:
+        return ""
+    try:
+        obj_type = learner.classify_objective(objective)
+    except Exception:
+        obj_type = "other"
+    failed = []
+    absorbed = []
+    for exp in experiences:
+        otype = (exp.get("overall") or {}).get("objective_type")
+        if otype != obj_type:
+            continue
+        outcome = str(exp.get("outcome") or "").lower()
+        if outcome in {"abandoned", "no_op"}:
+            failed.append(exp)
+        elif outcome == "absorbed":
+            absorbed.append(exp)
+    lines = []
+    for exp in failed[-3:]:
+        ffs = (exp.get("overall") or {}).get("failure_factors") or []
+        detail = "; ".join(str(f)[:160] for f in ffs[:3]) or "(no failure factors recorded)"
+        lines.append(f"- cycle {exp.get('task_id')} ({exp.get('outcome')}): {detail}")
+        tools = [
+            str(c.get("tool") or "") for c in (exp.get("critical_steps") or [])
+            if c.get("tool")
+        ]
+        if tools:
+            lines.append(f"    drags: {', '.join(tools[:4])}")
+    for exp in absorbed[-2:]:
+        pattern = str((exp.get("overall") or {}).get("reusable_pattern") or "")
+        if pattern:
+            lines.append(f"- cycle {exp.get('task_id')} (absorbed): {pattern[:200]}")
+    return "\n".join(lines)[:1500]
+
+
 def build_evolution_task_text(cycle: int) -> str:
     """Build the next evolution-campaign task prompt."""
     from ouroboros.config import get_evolution_persistent_objective
@@ -1075,6 +1129,56 @@ def build_evolution_task_text(cycle: int) -> str:
             "## Owner Standing Steer (optional bias — does NOT override the Objective above)",
             steer,
         ])
+    # Evolution-layer plan (PAPER 不足 4+7): the worker-side planner's structured
+    # guidance for THIS objective. Guidance only — the Objective above is still
+    # the contract; the cycle may deviate when new evidence contradicts the plan.
+    _plan = campaign.get("evolution_plan")
+    if isinstance(_plan, dict) and str(_plan.get("approach") or "").strip():
+        _plan_parts = [
+            "",
+            "## Evolution Plan (structured guidance from the planner)",
+            f"- Approach: {str(_plan.get('approach') or '')[:600]}",
+        ]
+        _steps = _plan.get("implementation_steps") or []
+        if _steps:
+            _plan_parts.append(
+                "- Steps: " + " -> ".join(str(s)[:200] for s in _steps)[:700]
+            )
+        _verif = _plan.get("verification_plan") or []
+        if _verif:
+            _plan_parts.append(
+                "- Verification: " + " || ".join(str(v)[:200] for v in _verif)[:600]
+            )
+        _plan_risks = _plan.get("risks") or []
+        if _plan_risks:
+            _plan_parts.append(
+                "- Risks to watch: " + ", ".join(str(r)[:160] for r in _plan_risks)[:500]
+            )
+        parts.extend(_plan_parts)
+    # Evolution-layer lessons (PAPER 不足 5): when the layer is on, surface the
+    # Track-B cycle experience (objective-TYPE matched, failures + absorbed
+    # patterns) so a RETRY cycle of the same objective carries step-level
+    # lessons instead of only the execution=error history row. Context only —
+    # same positioning as the plan above; never a work order.
+    try:
+        from ouroboros.config import get_multi_agent_evolver_enabled
+
+        if get_multi_agent_evolver_enabled():
+            from supervisor import queue as _queue
+
+            _lessons = _cycle_lessons_for(
+                str(campaign.get("objective") or ""),
+                pathlib.Path(_queue.DRIVE_ROOT),
+            )
+            if _lessons:
+                parts.extend([
+                    "",
+                    "## Lessons From Past Cycles (context only — weigh them, they are not a work order)",
+                    "",
+                    _lessons,
+                ])
+    except Exception:
+        log.debug("evolution task lessons injection failed", exc_info=True)
     progress = str(campaign.get("progress_notes") or "").strip()
     if progress:
         parts.extend(["", "## Progress So Far", progress])
