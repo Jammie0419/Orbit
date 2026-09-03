@@ -196,6 +196,14 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # LLM budget on experience extraction and planning. Disabled == exactly the
     # V4 post-task pipeline behavior today.
     "OUROBOROS_MULTI_AGENT_EVOLVER": "false",
+    # Skill evolution envelope (PAPER Phase 3: Hermes-Style Skill Evolution):
+    # trajectory -> self-authored skill auto-generation + GEPA genetic evolution
+    # of failing self-authored skills + nudge-driven review cadence + quality-
+    # aware routing boost. Default OFF (opt-in): generation/evolution spend LLM
+    # budget and write new skills under the data-plane skills/self/ tree; they
+    # stay pending review until the existing review gates pass. Disabled == no
+    # skill mutation and no router scoring change.
+    "OUROBOROS_SKILL_EVOLUTION": "false",
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5.2",
     # web_search backend pin: auto (default OpenAI-first cascade) | ddgs (pure
     # retrieval, no second LLM — for fixed-model runs) | openai | openrouter | anthropic.
@@ -809,6 +817,15 @@ def get_multi_agent_evolver_enabled() -> bool:
     LLM budget on experience extraction and planning. Disabled == exactly the
     V4 post-task pipeline behavior."""
     return _settings_flag_enabled("OUROBOROS_MULTI_AGENT_EVOLVER")
+
+
+def get_skill_evolution_enabled() -> bool:
+    """Whether the Hermes-style skill evolution envelope (PAPER Phase 3:
+    auto-generation + GEPA evolution + nudge + quality-aware routing) is
+    active. Default OFF (opt-in): it spends LLM budget and writes self-authored
+    skills under the data-plane skills/self/ tree (pending review). Disabled ==
+    no skill mutation and no router scoring change."""
+    return _settings_flag_enabled("OUROBOROS_SKILL_EVOLUTION")
 
 
 def _bounded_positive_int_setting(key: str, *, default: int, hard_max: int, min_value: int = 1) -> int:

@@ -415,6 +415,13 @@ class SmartRouter:
         except Exception:
             log.warning("SmartRouter: skill discovery failed", exc_info=True)
             skills = []
+        try:
+            # Phase 3: merge the per-skill execution ledger (state/skill_stats.json)
+            # onto each LoadedSkill so quality-aware scoring can read it.
+            from ouroboros.skill_evolution.stats import SkillStatsLedger
+            SkillStatsLedger(self.drive_root).attach_to_skills(skills)
+        except Exception:
+            log.debug("SmartRouter: skill stats attach failed", exc_info=True)
         self._skills_cache[self.drive_root] = (now, skills)
         return list(skills)
 
@@ -536,6 +543,25 @@ class SmartRouter:
             str(getattr(manifest, "body", "") or ""),
         ]).lower()
         score += min(0.2, 0.1 * self._tag_hits_in_text(task_tags, desc_lower))
+
+        # Phase 3 quality-aware adjustment (Hermes-Style Skill Evolution). Only
+        # SELF-AUTHORED skills get provenance/quality/version increments, and
+        # they stay inside the existing 1.0 cap — the documented invariants
+        # (base 0.5 < threshold 0.6 for unmarked skills; demote -0.5 beating
+        # any positive stack) therefore keep holding for community/native
+        # skills and for demote arithmetic.
+        if bool(getattr(skill, "is_self_authored", False)):
+            score += 0.1  # self-authored curation weight
+            stats = getattr(skill, "skill_stats", None) or {}
+            try:
+                rate = float(stats.get("success_rate") or 0.0)
+                version = int(stats.get("evolution_version") or 1)
+            except (TypeError, ValueError):
+                rate, version = 0.0, 1
+            if rate > 0.8:
+                score += 0.1  # high success rate
+            if version > 1:
+                score += 0.05 * (version - 1)  # +0.05 per evolved version
 
         return min(1.0, score)
 

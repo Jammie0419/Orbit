@@ -411,6 +411,22 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         except Exception:
             log.debug("post_task_evolution: evolution layer setup failed", exc_info=True)
             _evolver = None
+        # Skill evolution envelope (PAPER Phase 3, OUROBOROS_SKILL_EVOLUTION):
+        # an independent opt-in block — auto-generate a skill from this task's
+        # trace and, on the nudge cadence, genetically evolve failing
+        # self-authored skills. Independent of the promotion decision below.
+        # Disabled == no skill mutation anywhere (the router's quality scoring
+        # only reacts to self-authored markers + the stats ledger, so an
+        # untouched install behaves exactly as before).
+        try:
+            from ouroboros.config import get_skill_evolution_enabled
+
+            if get_skill_evolution_enabled():
+                from ouroboros.skill_evolution.pipeline import run_skill_evolution_step
+
+                run_skill_evolution_step(env, task, reflection_entry, llm_client)
+        except Exception:
+            log.debug("post_task_evolution: skill evolution step failed", exc_info=True)
         decision = _decide_promotion(env, task, reflection_entry, llm_client, force=force,
                                      strategy_digest=strategy_digest)
         if not decision or not decision.get("promote") or not decision.get("objective"):

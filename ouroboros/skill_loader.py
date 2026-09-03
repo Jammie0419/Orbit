@@ -236,6 +236,41 @@ def is_self_authored_skill_dir(
     )
 
 
+def write_self_authored_markers(
+    skill_dir: pathlib.Path,
+    drive_root: pathlib.Path,
+    *,
+    task_id: str = "",
+    created_by_tool: str = "skill_auto_generation",
+    chat_id: int = 0,
+) -> None:
+    """Write the dual self-authored provenance markers (dir + state) atomically.
+
+    Mirrors the data_write tool's schema (ouroboros/tools/core.py): both sides
+    must carry the SAME task_id and created_at for ``is_self_authored_skill_dir``
+    to accept the skill. The initial content hash pins the reviewed payload so
+    later edits go stale exactly like ordinary skills.
+    """
+    skill_dir = pathlib.Path(skill_dir)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        initial_hash = compute_content_hash(skill_dir)
+    except Exception:
+        initial_hash = ""
+    marker_payload = {
+        "schema_version": 1,
+        "origin": "self_authored",
+        "created_at": utc_now_iso(),
+        "chat_id": int(chat_id or 0),
+        "task_id": str(task_id or ""),
+        "created_by_tool": str(created_by_tool or ""),
+        "initial_content_hash": initial_hash,
+    }
+    atomic_write_json(skill_dir / SELF_AUTHORED_MARKER_FILENAME, marker_payload, trailing_newline=True)
+    state_marker = skill_state_dir(drive_root, skill_dir.name) / "self_authored.json"
+    atomic_write_json(state_marker, marker_payload, trailing_newline=True)
+
+
 # Manifest discovery
 
 

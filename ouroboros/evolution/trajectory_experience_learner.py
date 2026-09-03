@@ -63,6 +63,15 @@ def _loose_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _truncate_repr(value: Any, limit: int) -> str:
+    """Stable string form of a log field (args/result), bounded for prompts."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(value)
+    return text[:limit]
+
+
 def _default_main_model() -> str:
     """Explicit main-slot model (same resolution as the promotion chooser).
 
@@ -129,12 +138,17 @@ class TrajectoryExperienceLearner:
                     is_error = bool(row.get("is_error")) or str(
                         row.get("status") or ""
                     ).strip().lower() in {"error", "timeout"}
+                    args = row.get("args")
                     steps.append({
                         "step_id": len(steps),
                         "tool": str(row.get("tool") or ""),
                         "is_error": is_error,
                         "status": str(row.get("status") or ""),
                         "result_preview": str(row.get("result_preview") or "")[:200],
+                        # Backward-compatible passthrough (skill auto-generation
+                        # consumes call arguments; secrets were scrubbed at write
+                        # time by sanitize_tool_args_for_log).
+                        "args": _truncate_repr(args, 400),
                     })
         except Exception:
             log.debug("evolution layer: tools.jsonl read failed", exc_info=True)
