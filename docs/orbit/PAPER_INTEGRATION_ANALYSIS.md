@@ -1,8 +1,8 @@
 # Ouroboros 七大不足与论文融合优化方案
 
 > **分析日期**: 2026-08-11  
-> **最后更新**: 2026-09-02（不足 3 Harness Tree 归入智能路由范畴，与不足 1+8 放一块标注；无独立开关，随 `OUROBOROS_SMART_ROUTING` 启用）  
-> **版本**: 9.1（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存；智能路由章节并入不足 3）  
+> **最后更新**: 2026-09-02（进化层不足 4+5+7 实现（合并开关 `OUROBOROS_MULTI_AGENT_EVOLVER`）；不足 6 搁置；此前：Harness Tree 归入智能路由、新增后续工作计划）  
+> **版本**: 9.3（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存；智能路由并入不足 3；进化层已实现；含后续工作计划）  
 > **核心原则**: 按不足点组织，合并相似方案，突出自进化创新  
 > **适配度要求**: 最高，不强行融合  
 > **代码改动**: 最小，到位有用
@@ -441,6 +441,8 @@ graph TD
 ```
 
 ### 融合方案：Trajectory-based Experience Learning
+
+> **✅ 实现状态（2026-09-02）**：已实现于 `ouroboros/evolution/trajectory_experience_learner.py`（~430 行），随 `OUROBOROS_MULTI_AGENT_EVOLVER` 开关（与不足 4+7 合并一个开关）。**双轨信用分配**：A = 当前任务轨迹（`logs/tools.jsonl` 按 task_id 重建，决策时即时分析，`kind="task"`）；B = 已完成的进化循环轨迹（游标 `state/evolution_consumed.json` 幂等消费 `evolution_checkpoints.jsonl` 的终态行，重建该 cycle 的 evolution 任务轨迹，`kind="cycle"`——分析"哪个环节（分析/构建/验证）导致吸收或失败"，即论文"关键步骤识别"）。同一套评分公式（基础 0.5 + 成功 0.2 − 错误 0.3 + 快速 0.1 + token 省 0.1，归一化）+ 关键步骤（top3 + 最低 2）；整体经验由 LLM 提取（成功/失败因素、可复用模式），LLM 失败静默降级。产物：`state/evolution_experiences.jsonl`（经验）+ `state/step_credits.jsonl`（步骤信用）。`suggest_evolution_strategy` 把 cycle 经验汇成策略摘要注入进化决策 prompt（`[EVOLUTION EXPERIENCE]` 段，仅开关开时出现）供 Multi-Agent 规划器参考（verification 强化）；**失败重试侧同样闭合**：同一 campaign 的跨 cycle 重试（结构不变，≤3 次指纹 cap）时，`build_evolution_task_text` 按 objective 类型匹配注入 `## Lessons From Past Cycles` 段（失败因素 + 拖后腿工具 + 吸收循环的可复用模式）——重试的 agent 拿到步骤级教训而非只有 execution=error 历史行。回归见 `tests/test_evolution_layer.py`（25 例全绿），真实 LLM 冒烟见 `scripts/live/evolution/evolution_layer_live.py`。板块全文档见 **[EVOLUTION_LAYER_BOARD.md](./EVOLUTION_LAYER_BOARD.md)**。
 
 **来源**：Self-Improvements Survey - Trajectory-based Self-Improvement + Experience Learning  
 **适配度**：⭐⭐⭐⭐⭐  
@@ -1285,6 +1287,8 @@ graph LR
 ```
 
 ### 融合方案：Multi-Agent Evolver
+
+> **✅ 实现状态（2026-09-02）**：已实现于 `ouroboros/evolution/multi_agent_evolver.py`（worker 侧规划器形态，~260 行），与不足 5 合并为一个开关 **`OUROBOROS_MULTI_AGENT_EVOLVER`**（默认关闭，opt-in；关闭时 `post_task_evolution` 行为与 V4 现状逐字节一致）。Analyzer（任务轨迹+reflection → root causes + 候选改进）/ Researcher（approach/文件/步骤/风险）/ Verifier-advice（预验清单，历史 cycle 经验含"验证环节失败"模式时强化）三阶段 LLM 调用经 `chat_observed` 观测（主槽位、medium），产出八字段结构化 `evolution_plan`；plan 随 promotion request 携带（可选字段 `evolution_plan`，旧 request 无此字段行为不变），supervisor 激活 campaign 时挂载并注入进化任务文本（`## Evolution Plan` 段）。Builder/Verifier 执行复用既有 gated 机制（reviewed commit + restart 验证），不侵入 supervisor 编排。LLM 失败全链路降级占位。回归见 `tests/test_evolution_layer.py`（25 例全绿），真实 LLM 冒烟见 `scripts/live/evolution/evolution_layer_live.py`。板块全文档见 **[EVOLUTION_LAYER_BOARD.md](./EVOLUTION_LAYER_BOARD.md)**。
 
 **来源**：Adaptive Auto-Harness - Multi-Agent Evolver  
 **适配度**：⭐⭐⭐⭐⭐  
@@ -3027,6 +3031,54 @@ gantt
 
 **Phase 4 详细说明**见下文「🔍 Phase 4: 记忆增强」章节
 
+### 🧭 后续工作计划（2026-09-02 更新）
+
+#### 当前实施状态速览
+
+| 板块 | 内容 | 状态 |
+|------|------|------|
+| 智能路由（不足 1 + 3 + 8） | Smart Router（工具 + 技能统一路由）+ Harness Tree（L2 方向级执行策略） | ✅ **已实现**（首版 08-15，L2 专业化 09-02）——45 例测试全绿，已推送 gaia 分支；板块全文档见 [SMART_ROUTING_BOARD.md](./SMART_ROUTING_BOARD.md) |
+| 智能记忆（不足 2） | Smart Memory（重要性评估 + 智能淘汰 + 标签检索） | ✅ **已实现**（08-15）——17 例测试全绿 |
+| 进化层（不足 4 + 5 + 7） | Multi-Agent Evolver（规划器）+ Trajectory-based Experience Learning（双轨信用分配） | ✅ **已实现**（09-02）——合并开关 `OUROBOROS_MULTI_AGENT_EVOLVER`，22 例测试全绿 |
+| 不足 6 Prompt Optimization | 基于历史成功率优化决策 prompt | ⏳ **未实现**（按计划搁置） |
+| Phase 3 技能进化 | skill_auto_generation / skill_evolution（GEPA）/ skill_nudge_engine | ⏳ **未实现** |
+| Phase 4 外部记忆 | Session Index（FTS5）/ session_search / MemOS Provider / Context Cache | ⏳ **未实现** |
+| 进化实验 | EVOLUTION_EXPERIMENT_SPEC v1.1（2×2 四臂，GAIA 语料进化 → TB 89 条 pass@5 验收） | 📋 规格已定案，**待执行** |
+
+#### 后续工作（按优先级）
+
+**P0 — 实验基线就绪（烧预算前的前置）**
+1. **GAIA v0 验证结果合并与清洗**：服务器 7 段续跑（`/home/lzm/bench_runs/gaia_results/valid results/ouroboros_v0`）合并为单次运行外观（每任务取最新已评分实例 + provenance sidecar）；
+2. **抽取进化语料**：`devtools/benchmarks/gaia/extract_evolution_corpus.py`——正确 + 错误混合、Level 1/2/3 分层覆盖、30-40 条、离线回放零执行成本（失败任务是反思/backlog/promote 的主信号源）；
+3. **TB 89 条 pass@5 评估基线先行**：评估管道先跑通（terminal-bench 集成已完成），再烧进化预算。
+
+**P1 — 进化层实现（已完成 09-02；不足 6 按决策搁置）**
+4. ✅ **不足 4 + 7：Multi-Agent Evolver**——worker 侧规划器（Analyzer/Researcher/Verifier-advice 三阶段 LLM），产出结构化 `evolution_plan` 注入进化任务文本；Builder/Verifier 复用既有 gated 机制；
+5. ✅ **不足 5：Trajectory-based Experience Learning**——双轨信用分配（任务轨迹 A + 进化循环轨迹 B，游标幂等消费），经验仓库 + 策略摘要注入决策 prompt；
+6. ⏳ **不足 6：Prompt Optimization**（~300 行）——基于 `evolution_checkpoints.jsonl` 历史成功率动态生成决策 prompt，**暂缓**（当前决策已通过 `[EVOLUTION EXPERIENCE]` 段间接获得历史经验，收益边际，后续需要时再做）。
+   完成后 `run_evolution_arm.py` 的 V2/V3 臂开关（`OUROBOROS_MULTI_AGENT_EVOLVER` / `OUROBOROS_SKILL_EVOLUTION`）中，**V2/V3 的 `OUROBOROS_MULTI_AGENT_EVOLVER` 已可开**（`SKILL_EVOLUTION` 仍待 Phase 3）。
+
+**P2 — Phase 3：Hermes 风格技能进化（~1200 行）**
+7. `skill_auto_generation.py`：轨迹→技能生成（工具调用 >5 次、有自行修复、任务成功才触发），标 `is_self_authored` 双来源标记；
+8. `skill_evolution.py`：GEPA 算法（种群变异 / LLM 评估 / 择优，只进化自编写技能，成功率 <80% 且执行 ≥10 次）；
+9. `skill_nudge_engine.py`：定时回顾近期工作触发技能沉淀。
+
+**P3 — Phase 4：外部记忆（~640 行）**
+10. `memory_ext/session_index.py`：SQLite FTS5 索引 `chat.jsonl` + `task_reflections.jsonl`（不替代现有文件）；
+11. `tools/session_search.py`：冷调用搜索工具（agent_task_pipeline 桥接）；
+12. `memory_ext/memos_provider.py`：reflection 后同步语义索引 + context 构建时语义召回。
+
+**P3 — 智能路由板块 L3/L4（数据驱动进化，与实验并行）**
+13. **L3 校准报告**：`state/routing_history.jsonl`（已有 task_type/branch/tools/skills）+ `tools.jsonl`（实际调用回填，当前缺"实际使用"字段）+ 轨迹统计 → 每任务类型高频工具/常见错误/产出形态 → 人工确认后回填 `harness_configs/` 与 `TOOL_SETS`；
+14. **L4 闭环（P2 反馈回路）**：路由历史回填任务终态（`task_done.reason_code` 作为成功/失败标签）→ 三个闭环：工具集自动瘦身（保底 `enable_tools` 主动开启过的工具）、技能权重自校准（按真实 `skill_exec` 调用率）、分支参数自调优（强化有效分支/回退无收益分支；每类任务 ≥20 条样本才动参数，变更可回滚）；
+15. **分支级旋钮**：`top_k`/推荐阈值按分支可配（当前 `route()` 未暴露这两个参数）。
+
+#### 关键路径与依赖
+
+- **已可开跑：V0 / V1 / V2 / V3 全四臂**——任务层开关（`OUROBOROS_SMART_ROUTING`/`OUROBOROS_SMART_MEMORY`）与进化层开关（`OUROBOROS_MULTI_AGENT_EVOLVER`）均已实现（`SKILL_EVOLUTION` 待 Phase 3，环境变量设置无 getter 故无害）。<br/>建议执行顺序：P0-2（语料抽取）→ 四臂按 spec 同语料同配置跑（唯一差异 = 开关组合）→ TB 89 条 pass@5 统一验收。
+- 全程单模型（mimo-v2.5），4 个隔离环境、每臂 1 次会话、固定任务顺序；结果全部归因于 mimo-v2.5 + 融合方法。
+- 智能路由板块的观测点已就绪：`routing_history.jsonl` 的 `branch` 字段（走了哪个分支/是否落 main）即分支可区分性证据，可先于端到端分数产出 L2 达标证明。
+
 ### 总体预期收益
 
 | 指标 | 当前 | 预期提升 | 最终 |
@@ -3123,6 +3175,6 @@ gantt
 ---
 
 **文档生成时间**: 2026-08-12  
-**最后更新**: 2026-09-02（不足 3 Harness Tree 归入智能路由，与不足 1+8 放一块；此前 2026-08-12 Phase 4 基于源码分析修订为最小改动方案 - 搜索索引+MemOS+上下文缓存，~640 行）  
+**最后更新**: 2026-09-02（进化层不足 4+5+7 实现、不足 6 搁置；此前新增后续工作计划、Harness Tree 归入智能路由、08-12 Phase 4 最小改动修订）  
 **分析工具**: Claude Code + Ouroboros Source Analysis  
-**文档版本**: 9.1 (Phase 4 最小改动版 - 基于源码分析；智能路由并入不足 3)
+**文档版本**: 9.3 (Phase 4 最小改动版 - 基于源码分析；智能路由并入不足 3；进化层已实现；含后续工作计划)
