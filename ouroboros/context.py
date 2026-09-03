@@ -1215,6 +1215,109 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
     return "\n".join(lines)
 
 
+def _build_skills_needing_review_section(env: Any, *, max_lines: int = 12) -> str:
+    """Phase 3 (A2): surface skills that need an agent/owner decision — pending
+    review, stale verdict, review blockers, or broken packages — so generated/
+    evolved skills are never silently ignored. Gated by the skill-evolution
+    switch (those are the only producers of such states). Each line states the
+    reason; the section is omitted when everything is executable."""
+    try:
+        from ouroboros.config import get_skill_evolution_enabled
+
+        if not get_skill_evolution_enabled():
+            return ""
+        from ouroboros.skill_loader import summarize_skills
+
+        summary = summarize_skills(pathlib.Path(env.drive_root))
+    except Exception:
+        log.debug("Failed to build skills-needing-review section", exc_info=True)
+        return ""
+
+    def _clean(text: str, limit: int = 160) -> str:
+        cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+        cleaned = cleaned.replace("|", "\\|").replace("#", "＃")
+        if len(cleaned) > limit:
+            return cleaned[:limit] + "..."
+        return cleaned
+
+    lines = [
+        "## Skills Needing Review or Backoff",
+        "These skills are NOT executable until handled: pending/stale need a "
+        "skill_review (or owner attestation); blockers need a fix or override.",
+    ]
+    count = 0
+    for skill in summary.get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        name = _clean(str(skill.get("name") or ""), 60)
+        if not name:
+            continue
+        reason = _review_need_reason(env, skill)
+        if not reason:
+            continue
+        lines.append(f"- {name}: {reason}")
+        count += 1
+        if count >= max_lines:
+            lines.append("- ... (truncated; call list_skills for the full catalogue)")
+            break
+    if not count:
+        return ""
+    return "\n".join(lines)
+
+
+def _review_need_reason(env: Any, skill: Dict[str, Any]) -> str:
+    """One-line reason a skill is not executable, or '' when executable+fresh.
+
+    Status comes from the RAW review.json (the loader re-aggregates from
+    findings, which would mask a blockers verdict behind a single FAIL item);
+    staleness/load errors come from the discovery summary.
+    """
+    try:
+        from ouroboros.utils import read_json_dict
+
+        raw = read_json_dict(
+            pathlib.Path(env.drive_root) / "state" / "skills"
+            / str(skill.get("name") or "") / "review.json"
+        ) or {}
+    except Exception:
+        raw = {}
+    status = str(raw.get("status") or "").lower()
+    stale = bool(skill.get("review_stale"))
+    load_error = str(skill.get("load_error") or "")
+    if status in ("clean", "warnings") and not stale and not load_error:
+        return ""
+    parts: List[str] = []
+    if status == "blockers":
+        item = _first_blocker_item(env, str(skill.get("name") or ""))
+        parts.append(f"blocked by review ({item})" if item else "blocked by review")
+    elif status in ("", "pending"):
+        parts.append("pending review")
+    elif stale:
+        parts.append("content changed since review — re-review needed")
+    else:
+        parts.append(f"review status: {status or 'unknown'}")
+    if stale:
+        parts.append("review is stale")
+    if load_error:
+        parts.append(f"load error: {_clean(load_error, 120)}")
+    return "; ".join(parts)
+
+
+def _first_blocker_item(env: Any, skill_name: str) -> str:
+    try:
+        from ouroboros.utils import read_json_dict
+
+        review = read_json_dict(
+            pathlib.Path(env.drive_root) / "state" / "skills" / skill_name / "review.json"
+        ) or {}
+        for finding in review.get("findings") or []:
+            if isinstance(finding, dict) and str(finding.get("verdict") or "").upper() == "FAIL":
+                return str(finding.get("item") or "")[:80]
+    except Exception:
+        pass
+    return ""
+
+
 def _drive_state_section(env: Any) -> str:
     """Typed projection of ``state/state.json`` + an on-demand pointer. Keys =
     what the agent REASONS about; the rest is internal caches or a second spend
@@ -1365,6 +1468,9 @@ def _capture_context_core(
     installed_skills = _build_installed_skills_section(env)
     if installed_skills:
         dynamic_parts.append(installed_skills)
+    review_needs = _build_skills_needing_review_section(env)
+    if review_needs:
+        dynamic_parts.append(review_needs)
     dynamic_parts.extend([
         _drive_state_section(env),
         build_runtime_section(env, task, ctx=ctx),

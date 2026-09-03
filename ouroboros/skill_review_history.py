@@ -136,6 +136,72 @@ def count_attempts(
     return sum(1 for row in history if str(row.get("content_hash") or "") == content_hash)
 
 
+def verdict_for_hash(
+    drive_root: pathlib.Path,
+    skill_name: str,
+    content_hash: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the most recent EXECUTABLE review verdict bound to a payload hash.
+
+    Consulted after a content restore (e.g. the skill-evolution auto-rollback):
+    when the restored bytes match a hash that previously received a
+    ``clean``/``warnings`` verdict, that verdict can be re-applied without a
+    fresh review — the hash binding is satisfied. ``review.json`` (current
+    verdict) is checked first; otherwise the append-only review history is
+    scanned for the latest executable row with the same ``content_hash``.
+
+    Returns ``{"status", "content_hash", "findings", "timestamp",
+    "reviewer_models", "review_profile"}`` or None. Never raises.
+    """
+    from ouroboros.skill_review_status import STATUS_CLEAN, STATUS_WARNINGS, normalize_skill_review_status
+    from ouroboros.utils import read_json_dict
+
+    executable = {STATUS_CLEAN, STATUS_WARNINGS}
+    target = str(content_hash or "").strip()
+    if not target:
+        return None
+    drive_root = pathlib.Path(drive_root)
+    safe_name = str(skill_name or "")
+    if not safe_name:
+        return None
+
+    def _shape(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        status = str(row.get("status") or "").lower()
+        try:
+            status = normalize_skill_review_status(status)
+        except Exception:
+            status = status.lower()
+        if status not in executable:
+            return None
+        return {
+            "status": status,
+            "content_hash": target,
+            "findings": row.get("findings") or row.get("fail_findings") or [],
+            "timestamp": str(row.get("timestamp") or row.get("ts") or ""),
+            "reviewer_models": row.get("reviewer_models") or [],
+            "review_profile": str(row.get("review_profile") or ""),
+        }
+
+    # 1. The current verdict, when it already covers this hash.
+    current = read_json_dict(drive_root / "state" / "skills" / safe_name / "review.json") or {}
+    if str(current.get("content_hash") or "") == target:
+        shaped = _shape(current)
+        if shaped is not None:
+            return shaped
+    # 2. The append-only history (latest executable row for this hash).
+    best: Optional[Dict[str, Any]] = None
+    try:
+        for row in iter_jsonl_objects(review_history_path(drive_root, safe_name)):
+            if str(row.get("content_hash") or "") != target:
+                continue
+            shaped = _shape(row)
+            if shaped is not None:
+                best = shaped  # rows are appended in order; keep the latest
+    except Exception:
+        log.debug("skill review history scan failed", exc_info=True)
+    return best
+
+
 def append_history(
     drive_root: pathlib.Path,
     skill_name: str,
