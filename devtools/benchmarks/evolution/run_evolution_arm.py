@@ -19,9 +19,10 @@ Each arm gets ONE isolated session under ``bench_runs/evolution/<arm>/``
 The evolution machinery runs inside the isolated server; the live Ouroboros
 installation and repo are never touched (clone has its origin removed).
 
-Only arm ``V0`` (all switches off) is runnable today: the V1/V2/V3 evolution-layer
-switches (OUROBOROS_MULTI_AGENT_EVOLVER / OUROBOROS_SKILL_EVOLUTION) are spec'd but
-not yet implemented in the codebase — see EVOLUTION_EXPERIMENT_SPEC.md §2.4.
+All four arms are runnable: the evolution-layer switches (OUROBOROS_MULTI_AGENT_EVOLVER,
+implemented 2026-09-02) and the skill-evolution switch (OUROBOROS_SKILL_EVOLUTION,
+implemented 2026-09-03 — auto-generation + GEPA evolution + nudge, see docs/orbit/
+PAPER_INTEGRATION_ANALYSIS.md Phase 3) gate everything behind opt-in keys.
 
 Running this driver spends real LLM budget (reflection per record + promotion
 decisions every ``cadence`` records + evolution campaigns). Use ``--dry-run``
@@ -76,7 +77,8 @@ PERSISTENT_OBJECTIVE = (
     "拒绝只对单一任务类型有效的特化技巧。"
 )
 
-# spec §10.2 — evolution-layer switches (V2/V3) are not implemented yet (§2.4).
+# spec §10.2 — evolution-layer switches; both are implemented and opt-in
+# (MULTI_AGENT_EVOLVER 2026-09-02, SKILL_EVOLUTION 2026-09-03 Phase 3).
 ARM_SWITCHES = {
     "V0": {},
     "V1": {"OUROBOROS_SMART_ROUTING": "true", "OUROBOROS_SMART_MEMORY": "true"},

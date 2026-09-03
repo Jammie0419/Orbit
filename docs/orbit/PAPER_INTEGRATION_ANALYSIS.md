@@ -1,8 +1,8 @@
 # Ouroboros 七大不足与论文融合优化方案
 
 > **分析日期**: 2026-08-11  
-> **最后更新**: 2026-09-02（进化层不足 4+5+7 实现（合并开关 `OUROBOROS_MULTI_AGENT_EVOLVER`）；不足 6 搁置；此前：Harness Tree 归入智能路由、新增后续工作计划）  
-> **版本**: 9.3（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存；智能路由并入不足 3；进化层已实现；含后续工作计划）  
+> **最后更新**: 2026-09-03（Phase 3 Hermes 风格技能进化实现（合并开关 `OUROBOROS_SKILL_EVOLUTION`：轨迹→技能自动生成 + GEPA 遗传进化 + Nudge 提醒 + 质量感知路由）；此前：进化层不足 4+5+7 实现、不足 6 搁置）  
+> **版本**: 9.4（Phase 4 最小改动版 - 搜索索引 + MemOS + 上下文缓存；智能路由并入不足 3；进化层与技能进化均已实现；含后续工作计划）  
 > **核心原则**: 按不足点组织，合并相似方案，突出自进化创新  
 > **适配度要求**: 最高，不强行融合  
 > **代码改动**: 最小，到位有用
@@ -45,7 +45,7 @@
 **关键创新**：
 - ✅ **智能路由**：工具和技能统一路由 + Harness Tree 任务适配（不足 3 是智能路由的纵向扩展），共享任务分类器与开关
 - ✅ **轨迹信用分配**：不仅学习整体经验，还学习每个步骤的经验
-- ✅ **技能进化**：自动生成技能 + 持续进化 + 质量感知路由（Phase 3）
+- ✅ **技能进化**：自动生成技能 + 持续进化 + 质量感知路由（Phase 3，✅ 2026-09-03 已实现）
 - ✅ **搜索索引 + 语义检索**：SQLite FTS5 搜索历史会话 + MemOS 语义检索 + 上下文缓存（Phase 4）
 
 ---
@@ -1640,6 +1640,11 @@ def _get_decision_prompt(drive_root):
 > **核心原则**：只进化自编写技能，不修改社区技能  
 > **来源**：Hermes Skill Auto-Generation + GEPA Algorithm
 
+> **✅ 实现状态（2026-09-03）**：全部四件套已实现于新包 `ouroboros/skill_evolution/`（`stats.py` 技能执行账本 `state/skill_stats.json`、`auto_generation.py` 轨迹→技能生成、`genetic_evolution.py` GEPA 种群进化、`nudge.py` 任务边界提醒节奏、`pipeline.py` 编排），合并开关 **`OUROBOROS_SKILL_EVOLUTION`**（默认 false，关闭时零技能写入、路由评分零变化）。生成技能落盘数据面 `drive_root/skills/self/`（双 `.self_authored.json` marker 复用既有 `write_self_authored_markers`，来源自动识别为 self_authored），默认 pending 审查 + disabled，执行资格仍由既有 review/owner-attestation 门控。轨迹重建复用进化层 `load_task_steps`（本次补 args 透传）+ `assign_credits`/`identify_critical_steps`；LLM 全部走主槽位 `chat_observed`、失败静默降级。路由质量感知：`_load_skills` 合并账本，评分仅对自编写技能 +0.1 自编 / +0.1 高成功率(>80%) / +0.05×(版本−1)，cap 1.0 与 demote −0.5 不变式经测试锁定。
+> **加固（同日）**：① **审查反馈闭环**——`recent_review_flags()` 提取最近审查 FAIL findings（本技能 review.json + review_history.jsonl；全局扫描各技能 review.json），注入生成 prompt（"避免重复被标模式"）与进化的失败分析/适应度 prompt（"重复审查标记的变体必须低分"），防止同类问题反复出现；② **进化覆盖前 `.replaced-` 备份**——采纳路径先把旧包按技能系统孤儿备份惯例复制为 `<名>.replaced-<时间戳>/`（发现机制自动跳过），路径记入 `skill_evolution_history.jsonl` 的 `backup_dir`；③ **审查失败自动回滚**——每次任务边界先跑 `rollback_failed_evolutions()`：存在备份且当前 payload 的审查结论为 `blockers`（verdict 哈希 == 当前内容哈希）时，自动还原旧版、消费备份、记 `action: rolled_back`；回滚后技能进入 24h 冷却（不再次进化，防翻烙饼）。
+> **GEPA 对齐升级（同日，源码实证）**：依据 `hermes-agent-self-evolution` + DSPy `gepa` 源码逐行核实后的两路升级——**安全侧**：A1 `verdict_for_hash` 哈希→结论索引，回滚还原字节后命中历史 clean/warnings 结论即自动恢复可执行（回滚完整还原含 marker，state 侧同步，字节与旧哈希一致）；A2 context 新增 `## Skills Needing Review or Backoff` 可见性段（pending/stale/blockers 及原因，读 review.json 原始状态规避 loader 重新聚合造成 blockers 被掩盖）。**变异/评估侧**：B1 种群渲染哈希去重 + 空提案拒绝；B2 反射式变异（变异 prompt 注入该技能真实失败轨迹行，"必须消除这些失败模式"，策略池降级为兜底）；B3 多案例评估（技能自身历史构造 ≤5 条 mini 案例，逐案例打分取均值，降单次判断方差）；B4 holdout 校准（≥3 次采纳且评估均值−实测 ≥0.1 → fitness ×0.9 折扣收紧门槛，数据驱动）。A3（采纳后自动重审开关）仅记录不实现。
+> 自动化回归 `tests/test_skill_evolution.py`（67 例，含备份/反馈注入/自动回滚/冷却/verdict 索引/可见性/去重/反射变异/多案例/校准断言）+ 既有路由/进化层/技能套件全绿；真实 LLM 冒烟 `scripts/live/skills/skill_evolution_live.py`（temp drive，含 review-feedback 种子 + 真实失败文本 + 自动回滚复原场景，仓库零改动）。`run_evolution_arm.py` 四臂 V0-V3 开关全部可开。板块全文档（完整流程、GEPA 详解、安全闸、真实冒烟剧本、升级章节）见 **[SKILL_EVOLUTION_BOARD.md](./SKILL_EVOLUTION_BOARD.md)**。
+
 ### 现状分析
 
 **Ouroboros 技能系统现状**（`ouroboros/skill_loader.py`）：
@@ -3041,7 +3046,7 @@ gantt
 | 智能记忆（不足 2） | Smart Memory（重要性评估 + 智能淘汰 + 标签检索） | ✅ **已实现**（08-15）——17 例测试全绿 |
 | 进化层（不足 4 + 5 + 7） | Multi-Agent Evolver（规划器）+ Trajectory-based Experience Learning（双轨信用分配） | ✅ **已实现**（09-02）——合并开关 `OUROBOROS_MULTI_AGENT_EVOLVER`，22 例测试全绿 |
 | 不足 6 Prompt Optimization | 基于历史成功率优化决策 prompt | ⏳ **未实现**（按计划搁置） |
-| Phase 3 技能进化 | skill_auto_generation / skill_evolution（GEPA）/ skill_nudge_engine | ⏳ **未实现** |
+| Phase 3 技能进化 | skill_auto_generation / skill_evolution（GEPA）/ skill_nudge_engine → 实装于新包 `ouroboros/skill_evolution/`（stats/auto_generation/genetic_evolution/nudge/pipeline） | ✅ **已实现**（09-03）——合并开关 `OUROBOROS_SKILL_EVOLUTION`，40 例测试全绿，live 冒烟 `scripts/live/skills/`；生成/进化技能默认 pending 审查，执行资格仍由既有门控 |
 | Phase 4 外部记忆 | Session Index（FTS5）/ session_search / MemOS Provider / Context Cache | ⏳ **未实现** |
 | 进化实验 | EVOLUTION_EXPERIMENT_SPEC v1.1（2×2 四臂，GAIA 语料进化 → TB 89 条 pass@5 验收） | 📋 规格已定案，**待执行** |
 
@@ -3058,10 +3063,11 @@ gantt
 6. ⏳ **不足 6：Prompt Optimization**（~300 行）——基于 `evolution_checkpoints.jsonl` 历史成功率动态生成决策 prompt，**暂缓**（当前决策已通过 `[EVOLUTION EXPERIENCE]` 段间接获得历史经验，收益边际，后续需要时再做）。
    完成后 `run_evolution_arm.py` 的 V2/V3 臂开关（`OUROBOROS_MULTI_AGENT_EVOLVER` / `OUROBOROS_SKILL_EVOLUTION`）中，**V2/V3 的 `OUROBOROS_MULTI_AGENT_EVOLVER` 已可开**（`SKILL_EVOLUTION` 仍待 Phase 3）。
 
-**P2 — Phase 3：Hermes 风格技能进化（~1200 行）**
-7. `skill_auto_generation.py`：轨迹→技能生成（工具调用 >5 次、有自行修复、任务成功才触发），标 `is_self_authored` 双来源标记；
-8. `skill_evolution.py`：GEPA 算法（种群变异 / LLM 评估 / 择优，只进化自编写技能，成功率 <80% 且执行 ≥10 次）；
-9. `skill_nudge_engine.py`：定时回顾近期工作触发技能沉淀。
+**P2 — Phase 3：Hermes 风格技能进化（~1200 行）**（✅ 已完成 09-03，详见上文实现状态）
+7. ✅ `skill_auto_generation.py`：轨迹→技能生成（工具调用 >5 次、有自行修复、任务成功才触发），标 `is_self_authored` 双来源标记——实装于 `ouroboros/skill_evolution/auto_generation.py`；
+8. ✅ `skill_evolution.py`：GEPA 算法（种群变异 / LLM 评估 / 择优，只进化自编写技能，成功率 <80% 且执行 ≥10 次）——实装于 `genetic_evolution.py`；
+9. ✅ `skill_nudge_engine.py`：定时回顾近期工作触发技能沉淀（任务边界节奏，1h 间隔）——实装于 `nudge.py`；
+   配套：`stats.py`（执行账本，GEPA 门与路由成功率加权的数据源）+ `pipeline.py`（`maybe_promote` 内独立开关段编排）+ 路由质量感知评分（仅自编写技能，cap 1.0 不变式保持）。
 
 **P3 — Phase 4：外部记忆（~640 行）**
 10. `memory_ext/session_index.py`：SQLite FTS5 索引 `chat.jsonl` + `task_reflections.jsonl`（不替代现有文件）；
@@ -3175,6 +3181,6 @@ gantt
 ---
 
 **文档生成时间**: 2026-08-12  
-**最后更新**: 2026-09-02（进化层不足 4+5+7 实现、不足 6 搁置；此前新增后续工作计划、Harness Tree 归入智能路由、08-12 Phase 4 最小改动修订）  
+**最后更新**: 2026-09-03（Phase 3 技能进化实现（`OUROBOROS_SKILL_EVOLUTION`）；此前进化层不足 4+5+7 实现、不足 6 搁置、新增后续工作计划、Harness Tree 归入智能路由）  
 **分析工具**: Claude Code + Ouroboros Source Analysis  
-**文档版本**: 9.3 (Phase 4 最小改动版 - 基于源码分析；智能路由并入不足 3；进化层已实现；含后续工作计划)
+**文档版本**: 9.4 (Phase 4 最小改动版 - 基于源码分析；智能路由并入不足 3；进化层与技能进化均已实现；含后续工作计划)
