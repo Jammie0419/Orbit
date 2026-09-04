@@ -1,0 +1,12 @@
+{
+ "id": 5,
+ "meta": {
+  "name": "webcam",
+  "region": "Seoul"
+ },
+ "values": {
+  "amount": 17,
+  "tax": 5.49,
+  "shipping": null
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "id": 12,
+ "meta": {
+  "name": "mouse",
+  "region": "Beijing"
+ },
+ "values": {
+  "amount": 1000000,
+  "tax": 8.32,
+  "shipping": 15.5
+ }
+}

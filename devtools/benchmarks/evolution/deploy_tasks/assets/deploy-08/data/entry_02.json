@@ -1,0 +1,12 @@
+{
+ "id": 2,
+ "meta": {
+  "name": "hub",
+  "region": "Shanghai"
+ },
+ "values": {
+  "amount": 0,
+  "tax": 3.11,
+  "shipping": 0
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "id": 1,
+ "meta": {
+  "name": "hub",
+  "region": "Singapore"
+ },
+ "values": {
+  "amount": -3,
+  "tax": 9.44,
+  "shipping": 5
+ }
+}

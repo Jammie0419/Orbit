@@ -1,0 +1,12 @@
+{
+ "id": 9,
+ "meta": {
+  "name": "hub",
+  "region": "Paris"
+ },
+ "values": {
+  "amount": 17,
+  "tax": 2.47,
+  "shipping": null
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "id": 6,
+ "meta": {
+  "name": "headset",
+  "region": "London"
+ },
+ "values": {
+  "amount": 17,
+  "tax": 9.78,
+  "shipping": 15.5
+ }
+}

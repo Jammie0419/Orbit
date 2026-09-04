@@ -1,0 +1,402 @@
+2026-07-18T18:02:51 ERROR 104 search-svc request failed: timeout
+2026-02-15T20:44:37 ERROR 357 queue-worker request failed: timeout
+2026-04-10T14:33:05 ERROR 243 auth-svc request failed: db down
+2026-02-20T21:31:38 WARN billing-svc slow query 732ms
+2026-06-24T20:35:40 ERROR 167 auth-svc request failed: db down
+2026-07-19T20:14:16 INFO api-gateway handled 73 reqs
+2026-04-21T02:52:53 INFO api-gateway handled 58 reqs
+2026-02-10T07:41:00 INFO api-gateway handled 54 reqs
+2026-04-19T11:44:39 ERROR 161 queue-worker request failed: throttled
+2026-04-10T11:25:17 WARN billing-svc slow query 319ms
+2026-04-25T03:59:39 ERROR 286 auth-svc request failed: throttled
+2026-03-24T13:20:49 ERROR 227 auth-svc request failed: timeout
+2026-09-10T23:37:42 ERROR 480 billing-svc request failed: db down
+2026-07-26T21:45:16 ERROR 494 api-gateway request failed: 5xx
+2026-04-21T08:09:08 WARN auth-svc slow query 908ms
+2026-08-13T17:30:42 INFO auth-svc handled 39 reqs
+2026-06-17T10:42:04 WARN search-svc slow query 200ms
+2026-08-22T17:20:01 INFO auth-svc handled 10 reqs
+2026-05-13T18:32:41 INFO auth-svc handled 21 reqs
+2026-05-16T21:11:34 ERROR 238 queue-worker request failed: timeout
+2026-07-17T02:24:54 INFO queue-worker handled 66 reqs
+2026-02-21T04:36:03 INFO search-svc handled 69 reqs
+2026-06-14T22:08:09 INFO search-svc handled 56 reqs
+2026-02-23T07:29:18 ERROR 445 api-gateway request failed: timeout
+2026-07-18T06:13:18 ERROR 104 auth-svc request failed: 5xx
+2026-08-19T10:12:57 WARN search-svc slow query 986ms
+2026-07-24T16:44:40 ERROR 480 auth-svc request failed: 5xx
+2026-04-15T12:22:27 INFO auth-svc handled 81 reqs
+2026-01-24T03:20:39 ERROR 161 auth-svc request failed: db down
+2026-05-18T07:02:29 INFO auth-svc handled 5 reqs
+2026-07-19T17:38:39 WARN billing-svc slow query 659ms
+2026-03-22T05:11:34 ERROR 480 search-svc request failed: 5xx
+2026-07-28T12:19:39 INFO search-svc handled 48 reqs
+2026-06-28T19:05:11 INFO billing-svc handled 37 reqs
+2026-06-25T13:14:05 INFO queue-worker handled 87 reqs
+2026-07-26T10:39:18 ERROR 303 billing-svc request failed: timeout
+2026-09-18T17:03:24 INFO queue-worker handled 45 reqs
+2026-05-22T23:44:02 WARN api-gateway slow query 93ms
+2026-02-21T20:39:06 WARN api-gateway slow query 335ms
+2026-08-15T21:52:04 INFO auth-svc handled 11 reqs
+2026-06-23T23:01:36 ERROR 542 auth-svc request failed: db down
+2026-03-18T02:21:43 ERROR 499 api-gateway request failed: db down
+2026-07-15T18:52:32 ERROR 243 queue-worker request failed: throttled
+2026-07-21T02:48:24 ERROR 535 billing-svc request failed: throttled
+2026-08-13T09:46:05 INFO queue-worker handled 21 reqs
+2026-07-21T15:40:45 ERROR 167 queue-worker request failed: 5xx
+2026-06-23T00:26:46 INFO api-gateway handled 83 reqs
+2026-06-27T09:16:21 WARN api-gateway slow query 945ms
+2026-05-12T02:57:38 ERROR 201 queue-worker request failed: 5xx
+2026-05-21T11:45:53 INFO queue-worker handled 12 reqs
+2026-02-15T05:11:42 WARN search-svc slow query 366ms
+2026-01-11T21:24:17 ERROR 104 api-gateway request failed: timeout
+2026-07-16T19:27:58 WARN billing-svc slow query 840ms
+2026-05-17T23:14:31 WARN auth-svc slow query 294ms
+2026-05-22T22:01:29 ERROR 350 api-gateway request failed: 5xx
+2026-02-15T02:03:52 ERROR 343 queue-worker request failed: db down
+2026-03-18T19:14:16 WARN auth-svc slow query 963ms
+2026-01-15T04:54:30 WARN api-gateway slow query 321ms
+2026-05-24T07:39:29 INFO api-gateway handled 37 reqs
+2026-04-19T10:00:28 ERROR 226 api-gateway request failed: throttled
+2026-01-10T00:10:03 ERROR 445 queue-worker request failed: timeout
+2026-06-28T13:02:20 WARN queue-worker slow query 966ms
+2026-04-19T12:20:36 ERROR 499 auth-svc request failed: 5xx
+2026-01-20T06:29:08 INFO queue-worker handled 3 reqs
+2026-04-11T22:24:19 ERROR 343 search-svc request failed: timeout
+2026-08-22T20:20:57 INFO auth-svc handled 75 reqs
+2026-01-18T05:15:18 INFO queue-worker handled 83 reqs
+2026-06-21T11:08:30 ERROR 286 api-gateway request failed: timeout
+2026-06-10T00:42:06 ERROR 350 billing-svc request failed: timeout
+2026-06-26T18:10:13 ERROR 286 auth-svc request failed: db down
+2026-01-11T18:25:05 INFO billing-svc handled 11 reqs
+2026-07-27T16:58:46 INFO search-svc handled 66 reqs
+2026-02-21T01:16:41 ERROR 201 billing-svc request failed: timeout
+2026-05-28T15:46:10 ERROR 226 queue-worker request failed: timeout
+2026-06-23T20:08:40 ERROR 238 auth-svc request failed: db down
+2026-04-21T02:27:34 INFO search-svc handled 57 reqs
+2026-01-18T00:32:19 ERROR 226 api-gateway request failed: 5xx
+2026-06-11T07:16:27 ERROR 201 queue-worker request failed: timeout
+2026-06-16T15:07:42 WARN search-svc slow query 42ms
+2026-05-15T10:09:18 ERROR 243 search-svc request failed: db down
+2026-01-20T11:13:26 ERROR 286 api-gateway request failed: throttled
+2026-03-18T18:12:09 ERROR 243 queue-worker request failed: throttled
+2026-05-20T07:21:58 WARN auth-svc slow query 953ms
+2026-03-20T20:10:02 ERROR 343 api-gateway request failed: 5xx
+2026-02-16T16:58:05 ERROR 499 auth-svc request failed: timeout
+2026-04-13T02:24:41 ERROR 445 api-gateway request failed: throttled
+2026-07-17T18:47:45 ERROR 243 api-gateway request failed: db down
+2026-09-24T00:49:04 INFO search-svc handled 52 reqs
+2026-08-27T02:40:10 ERROR 499 auth-svc request failed: throttled
+2026-04-11T00:12:09 ERROR 350 billing-svc request failed: db down
+2026-07-21T15:55:07 ERROR 343 search-svc request failed: throttled
+2026-03-16T07:57:46 WARN billing-svc slow query 539ms
+2026-03-24T22:44:01 ERROR 226 billing-svc request failed: 5xx
+2026-06-20T11:28:08 ERROR 303 search-svc request failed: throttled
+2026-03-17T14:10:03 ERROR 104 billing-svc request failed: throttled
+2026-02-15T16:44:55 ERROR 480 search-svc request failed: throttled
+2026-04-28T13:15:14 INFO search-svc handled 85 reqs
+2026-09-20T10:17:23 ERROR 535 queue-worker request failed: throttled
+2026-01-23T22:14:01 WARN queue-worker slow query 455ms
+2026-05-27T22:35:21 INFO billing-svc handled 96 reqs
+2026-07-17T08:09:56 ERROR 445 auth-svc request failed: throttled
+2026-07-26T14:02:32 ERROR 499 api-gateway request failed: throttled
+2026-03-26T14:17:50 INFO search-svc handled 26 reqs
+2026-02-14T13:21:07 ERROR 104 auth-svc request failed: 5xx
+2026-06-16T09:45:15 ERROR 201 billing-svc request failed: throttled
+2026-08-23T00:42:26 WARN auth-svc slow query 257ms
+2026-08-12T20:29:23 ERROR 226 search-svc request failed: throttled
+2026-08-18T00:29:03 ERROR 512 auth-svc request failed: db down
+2026-08-21T11:22:49 ERROR 226 queue-worker request failed: 5xx
+2026-06-18T11:32:14 INFO api-gateway handled 69 reqs
+2026-04-19T18:58:42 INFO search-svc handled 74 reqs
+2026-05-28T18:34:58 ERROR 357 auth-svc request failed: throttled
+2026-06-19T04:33:37 ERROR 227 api-gateway request failed: throttled
+2026-03-25T08:04:36 INFO queue-worker handled 5 reqs
+2026-02-25T16:59:07 ERROR 480 api-gateway request failed: db down
+2026-02-11T00:30:18 WARN auth-svc slow query 319ms
+2026-02-27T08:44:49 ERROR 499 auth-svc request failed: timeout
+2026-03-24T17:03:14 ERROR 343 api-gateway request failed: throttled
+2026-05-13T00:14:11 INFO api-gateway handled 83 reqs
+2026-01-17T14:37:53 WARN queue-worker slow query 15ms
+2026-05-13T06:09:22 INFO auth-svc handled 13 reqs
+2026-06-18T16:54:36 ERROR 243 search-svc request failed: 5xx
+2026-03-12T18:05:04 INFO search-svc handled 70 reqs
+2026-06-22T03:06:52 INFO billing-svc handled 26 reqs
+2026-08-15T05:51:25 ERROR 535 queue-worker request failed: db down
+2026-09-20T05:08:49 INFO queue-worker handled 67 reqs
+2026-07-22T04:10:44 ERROR 535 auth-svc request failed: timeout
+2026-06-27T12:28:17 WARN api-gateway slow query 372ms
+2026-05-14T11:35:15 INFO auth-svc handled 34 reqs
+2026-05-10T19:35:48 ERROR 480 auth-svc request failed: throttled
+2026-03-16T12:44:38 INFO api-gateway handled 23 reqs
+2026-03-13T15:24:19 WARN api-gateway slow query 263ms
+2026-07-20T16:03:30 ERROR 343 search-svc request failed: timeout
+2026-04-15T02:12:10 WARN api-gateway slow query 45ms
+2026-09-24T09:47:21 INFO billing-svc handled 51 reqs
+2026-02-19T23:23:28 ERROR 243 auth-svc request failed: db down
+2026-05-23T13:39:58 ERROR 535 queue-worker request failed: throttled
+2026-08-18T19:56:21 ERROR 303 api-gateway request failed: 5xx
+2026-09-20T16:06:19 ERROR 357 queue-worker request failed: db down
+2026-05-21T04:08:00 ERROR 350 search-svc request failed: db down
+2026-02-21T05:14:03 ERROR 357 auth-svc request failed: db down
+2026-05-20T15:03:31 ERROR 480 billing-svc request failed: throttled
+2026-06-27T19:52:51 INFO auth-svc handled 73 reqs
+2026-07-16T05:26:38 INFO search-svc handled 82 reqs
+2026-03-19T19:44:35 WARN billing-svc slow query 5ms
+2026-04-26T03:30:22 ERROR 161 auth-svc request failed: 5xx
+2026-06-15T23:38:05 WARN auth-svc slow query 484ms
+2026-05-17T17:04:07 ERROR 238 auth-svc request failed: timeout
+2026-01-14T08:19:25 INFO search-svc handled 75 reqs
+2026-01-17T00:42:05 INFO billing-svc handled 20 reqs
+2026-08-15T11:58:44 INFO queue-worker handled 54 reqs
+2026-04-17T05:39:35 INFO api-gateway handled 25 reqs
+2026-04-14T01:02:18 ERROR 238 billing-svc request failed: timeout
+2026-09-22T15:02:07 ERROR 303 api-gateway request failed: timeout
+2026-03-19T22:41:19 ERROR 512 auth-svc request failed: throttled
+2026-01-26T04:45:19 WARN search-svc slow query 883ms
+2026-04-27T20:14:31 ERROR 535 billing-svc request failed: 5xx
+2026-06-13T22:09:40 ERROR 161 billing-svc request failed: throttled
+2026-02-10T15:00:03 INFO api-gateway handled 25 reqs
+2026-09-24T22:00:31 ERROR 167 billing-svc request failed: 5xx
+2026-02-25T15:42:24 ERROR 445 search-svc request failed: throttled
+2026-06-16T16:35:01 INFO billing-svc handled 55 reqs
+2026-05-12T03:45:37 ERROR 104 billing-svc request failed: timeout
+2026-03-20T21:35:12 INFO queue-worker handled 68 reqs
+2026-06-27T00:55:55 INFO search-svc handled 31 reqs
+2026-09-13T15:14:23 ERROR 542 api-gateway request failed: db down
+2026-06-11T01:38:12 INFO search-svc handled 52 reqs
+2026-05-28T11:57:24 INFO api-gateway handled 19 reqs
+2026-07-11T02:58:55 ERROR 499 auth-svc request failed: timeout
+2026-09-14T11:18:57 ERROR 499 queue-worker request failed: 5xx
+2026-05-22T09:23:56 INFO queue-worker handled 39 reqs
+2026-09-12T07:48:08 ERROR 350 billing-svc request failed: db down
+2026-03-21T06:20:51 INFO search-svc handled 46 reqs
+2026-07-21T17:38:14 INFO auth-svc handled 32 reqs
+2026-09-15T08:59:10 ERROR 343 search-svc request failed: 5xx
+2026-05-20T17:24:00 WARN search-svc slow query 130ms
+2026-03-24T20:36:11 INFO search-svc handled 72 reqs
+2026-06-25T02:59:02 INFO api-gateway handled 30 reqs
+2026-01-16T19:26:10 INFO auth-svc handled 3 reqs
+2026-07-12T07:56:33 ERROR 303 billing-svc request failed: 5xx
+2026-08-17T16:00:34 ERROR 535 search-svc request failed: timeout
+2026-05-24T07:29:24 INFO api-gateway handled 6 reqs
+2026-05-27T13:14:35 ERROR 350 api-gateway request failed: 5xx
+2026-02-26T17:51:41 ERROR 494 auth-svc request failed: timeout
+2026-01-28T18:56:44 ERROR 286 auth-svc request failed: throttled
+2026-01-25T10:55:35 ERROR 499 queue-worker request failed: timeout
+2026-07-23T05:34:52 ERROR 238 auth-svc request failed: throttled
+2026-09-25T04:41:22 ERROR 512 queue-worker request failed: timeout
+2026-06-26T22:12:22 ERROR 303 search-svc request failed: timeout
+2026-07-25T07:58:00 ERROR 226 search-svc request failed: db down
+2026-08-13T23:29:54 ERROR 512 api-gateway request failed: db down
+2026-04-10T18:45:20 ERROR 499 api-gateway request failed: 5xx
+2026-01-26T20:43:58 ERROR 303 search-svc request failed: throttled
+2026-04-11T04:24:59 ERROR 104 auth-svc request failed: timeout
+2026-01-14T08:03:41 INFO search-svc handled 36 reqs
+2026-05-11T23:29:37 ERROR 357 queue-worker request failed: 5xx
+2026-04-10T05:45:26 ERROR 499 auth-svc request failed: timeout
+2026-06-18T17:06:40 ERROR 226 queue-worker request failed: throttled
+2026-09-17T04:56:41 WARN auth-svc slow query 939ms
+2026-04-27T17:43:23 ERROR 499 search-svc request failed: timeout
+2026-03-12T13:17:16 ERROR 227 billing-svc request failed: db down
+2026-04-14T16:44:46 ERROR 535 api-gateway request failed: timeout
+2026-03-21T21:58:56 INFO auth-svc handled 16 reqs
+2026-04-24T08:31:40 WARN queue-worker slow query 801ms
+2026-09-16T05:42:28 ERROR 303 auth-svc request failed: throttled
+2026-07-26T19:59:10 ERROR 167 billing-svc request failed: 5xx
+2026-08-18T22:47:45 WARN search-svc slow query 220ms
+2026-02-17T05:58:15 ERROR 499 queue-worker request failed: db down
+2026-09-23T02:07:47 WARN api-gateway slow query 511ms
+2026-08-10T11:19:24 INFO queue-worker handled 22 reqs
+2026-09-27T09:12:03 WARN billing-svc slow query 739ms
+2026-03-19T19:09:18 ERROR 227 queue-worker request failed: throttled
+2026-08-23T02:15:33 ERROR 201 queue-worker request failed: timeout
+2026-07-26T16:18:34 INFO search-svc handled 73 reqs
+2026-08-28T18:16:23 WARN auth-svc slow query 210ms
+2026-01-19T01:40:49 ERROR 480 queue-worker request failed: throttled
+2026-04-24T03:43:24 ERROR 243 queue-worker request failed: 5xx
+2026-09-11T22:58:29 ERROR 303 search-svc request failed: 5xx
+2026-09-27T10:42:41 ERROR 343 search-svc request failed: timeout
+2026-03-16T17:50:30 WARN auth-svc slow query 552ms
+2026-08-17T11:17:20 WARN search-svc slow query 515ms
+2026-06-18T12:54:30 WARN auth-svc slow query 211ms
+2026-04-12T14:16:48 INFO search-svc handled 22 reqs
+2026-01-25T02:13:04 ERROR 350 billing-svc request failed: timeout
+2026-01-10T00:11:32 WARN billing-svc slow query 867ms
+2026-06-28T21:22:39 ERROR 357 search-svc request failed: 5xx
+2026-04-13T22:37:29 ERROR 445 search-svc request failed: 5xx
+2026-04-24T01:59:06 WARN billing-svc slow query 399ms
+2026-01-24T22:12:10 ERROR 480 billing-svc request failed: 5xx
+2026-08-16T05:10:29 ERROR 542 api-gateway request failed: db down
+2026-09-18T19:06:41 INFO queue-worker handled 25 reqs
+2026-07-19T06:26:23 INFO search-svc handled 38 reqs
+2026-09-22T03:49:45 INFO search-svc handled 35 reqs
+2026-06-14T12:28:20 INFO auth-svc handled 22 reqs
+2026-04-13T06:37:15 INFO auth-svc handled 80 reqs
+2026-03-18T07:52:47 ERROR 357 api-gateway request failed: db down
+2026-07-15T14:57:48 ERROR 161 search-svc request failed: timeout
+2026-06-18T06:58:22 INFO search-svc handled 3 reqs
+2026-02-14T22:46:37 ERROR 480 auth-svc request failed: timeout
+2026-09-13T21:11:48 WARN search-svc slow query 159ms
+2026-06-13T00:34:29 INFO search-svc handled 2 reqs
+2026-01-12T22:26:03 ERROR 343 search-svc request failed: db down
+2026-01-16T13:15:17 INFO queue-worker handled 24 reqs
+2026-07-23T00:19:12 ERROR 350 auth-svc request failed: db down
+2026-07-19T08:34:11 ERROR 494 queue-worker request failed: timeout
+2026-09-17T02:28:45 INFO search-svc handled 47 reqs
+2026-06-22T03:22:39 WARN search-svc slow query 957ms
+2026-06-21T04:28:34 INFO api-gateway handled 75 reqs
+2026-02-11T11:42:17 INFO search-svc handled 46 reqs
+2026-08-19T01:53:09 ERROR 227 api-gateway request failed: throttled
+2026-01-15T13:00:08 ERROR 357 queue-worker request failed: timeout
+2026-02-15T01:55:53 ERROR 104 billing-svc request failed: 5xx
+2026-06-25T12:25:52 WARN search-svc slow query 688ms
+2026-09-23T23:58:13 ERROR 227 auth-svc request failed: timeout
+2026-07-14T19:01:36 ERROR 445 queue-worker request failed: timeout
+2026-03-21T06:12:05 ERROR 499 search-svc request failed: 5xx
+2026-04-19T13:47:02 INFO queue-worker handled 91 reqs
+2026-03-21T21:49:38 ERROR 512 auth-svc request failed: db down
+2026-09-17T00:04:13 INFO billing-svc handled 63 reqs
+2026-03-12T22:18:06 INFO auth-svc handled 42 reqs
+2026-02-24T02:53:28 WARN search-svc slow query 317ms
+2026-08-16T13:37:50 INFO search-svc handled 28 reqs
+2026-08-26T04:18:39 ERROR 480 queue-worker request failed: timeout
+2026-04-24T21:15:08 INFO api-gateway handled 63 reqs
+2026-08-14T09:04:54 ERROR 227 billing-svc request failed: throttled
+2026-06-18T19:20:47 INFO search-svc handled 18 reqs
+2026-07-28T11:22:06 ERROR 286 api-gateway request failed: 5xx
+2026-04-11T16:17:31 WARN queue-worker slow query 274ms
+2026-01-28T07:48:19 ERROR 499 auth-svc request failed: db down
+2026-01-18T15:43:57 INFO queue-worker handled 52 reqs
+2026-09-25T20:34:42 INFO billing-svc handled 40 reqs
+2026-02-26T02:20:07 WARN queue-worker slow query 930ms
+2026-08-23T18:40:15 ERROR 167 queue-worker request failed: db down
+2026-03-18T18:48:12 ERROR 286 billing-svc request failed: timeout
+2026-04-11T04:36:10 ERROR 512 queue-worker request failed: db down
+2026-05-11T17:51:00 ERROR 445 queue-worker request failed: timeout
+2026-09-14T06:37:06 INFO api-gateway handled 99 reqs
+2026-01-14T20:41:39 INFO billing-svc handled 68 reqs
+2026-08-24T18:02:56 INFO api-gateway handled 17 reqs
+2026-03-28T13:45:49 INFO search-svc handled 83 reqs
+2026-04-15T19:46:32 INFO auth-svc handled 86 reqs
+2026-07-16T17:23:41 INFO billing-svc handled 81 reqs
+2026-01-20T10:00:27 ERROR 542 api-gateway request failed: db down
+2026-08-24T05:48:14 WARN auth-svc slow query 637ms
+2026-09-24T02:22:45 INFO queue-worker handled 4 reqs
+2026-07-14T13:01:49 INFO search-svc handled 62 reqs
+2026-03-15T13:02:46 ERROR 286 search-svc request failed: 5xx
+2026-09-16T10:11:25 INFO queue-worker handled 80 reqs
+2026-01-28T16:22:03 ERROR 542 queue-worker request failed: timeout
+2026-09-20T18:12:02 ERROR 161 queue-worker request failed: db down
+2026-01-14T13:15:13 ERROR 286 search-svc request failed: 5xx
+2026-04-22T03:49:39 ERROR 227 auth-svc request failed: 5xx
+2026-02-26T12:17:08 INFO billing-svc handled 16 reqs
+2026-01-24T23:27:31 INFO auth-svc handled 65 reqs
+2026-09-17T04:27:23 ERROR 286 queue-worker request failed: 5xx
+2026-05-22T19:16:06 INFO billing-svc handled 62 reqs
+2026-05-15T06:02:21 INFO auth-svc handled 16 reqs
+2026-07-26T09:32:34 INFO queue-worker handled 22 reqs
+2026-06-15T13:39:31 ERROR 499 search-svc request failed: 5xx
+2026-08-19T08:29:15 ERROR 286 search-svc request failed: timeout
+2026-07-11T08:31:21 INFO billing-svc handled 62 reqs
+2026-02-27T17:34:49 WARN billing-svc slow query 947ms
+2026-07-10T06:11:04 ERROR 243 queue-worker request failed: 5xx
+2026-01-26T04:46:03 INFO billing-svc handled 34 reqs
+2026-04-12T08:51:12 WARN search-svc slow query 281ms
+2026-05-23T08:58:01 INFO api-gateway handled 62 reqs
+2026-06-20T17:06:36 ERROR 243 search-svc request failed: throttled
+2026-04-10T14:27:01 ERROR 243 auth-svc request failed: db down
+2026-06-21T15:59:41 INFO queue-worker handled 7 reqs
+2026-06-14T15:42:59 ERROR 535 search-svc request failed: 5xx
+2026-04-18T10:25:06 ERROR 286 billing-svc request failed: timeout
+2026-04-11T15:50:49 ERROR 238 search-svc request failed: throttled
+2026-01-14T13:12:08 ERROR 161 api-gateway request failed: db down
+2026-06-10T15:44:14 INFO auth-svc handled 43 reqs
+2026-09-23T02:51:17 WARN auth-svc slow query 721ms
+2026-02-18T00:44:29 INFO billing-svc handled 98 reqs
+2026-03-27T06:20:52 ERROR 286 search-svc request failed: throttled
+2026-02-19T06:37:13 ERROR 512 api-gateway request failed: timeout
+2026-05-14T06:52:31 INFO queue-worker handled 72 reqs
+2026-08-14T18:47:27 INFO billing-svc handled 3 reqs
+2026-07-13T04:40:18 ERROR 512 api-gateway request failed: timeout
+2026-06-16T13:45:11 INFO api-gateway handled 38 reqs
+2026-08-19T08:28:02 INFO billing-svc handled 41 reqs
+2026-02-17T16:10:18 ERROR 227 queue-worker request failed: db down
+2026-07-13T17:19:37 INFO api-gateway handled 75 reqs
+2026-02-22T01:53:33 ERROR 542 queue-worker request failed: db down
+2026-04-17T07:27:39 INFO auth-svc handled 20 reqs
+2026-04-28T17:27:56 INFO api-gateway handled 47 reqs
+2026-05-24T17:18:49 INFO queue-worker handled 95 reqs
+2026-06-21T18:46:08 INFO queue-worker handled 33 reqs
+2026-02-27T07:01:31 ERROR 542 queue-worker request failed: db down
+2026-03-12T23:52:33 WARN queue-worker slow query 334ms
+2026-04-16T07:05:07 INFO search-svc handled 42 reqs
+2026-06-28T02:55:52 INFO search-svc handled 20 reqs
+2026-04-21T12:08:51 INFO queue-worker handled 20 reqs
+2026-08-22T08:24:38 ERROR 494 auth-svc request failed: throttled
+2026-03-18T20:58:51 INFO api-gateway handled 68 reqs
+2026-08-27T00:33:50 INFO auth-svc handled 89 reqs
+2026-08-14T05:53:20 ERROR 161 auth-svc request failed: timeout
+2026-02-26T03:09:27 INFO billing-svc handled 69 reqs
+2026-03-24T03:31:06 ERROR 227 auth-svc request failed: throttled
+2026-01-28T00:06:40 ERROR 445 queue-worker request failed: db down
+2026-03-12T13:28:00 INFO billing-svc handled 75 reqs
+2026-03-17T00:22:34 ERROR 480 search-svc request failed: 5xx
+2026-05-28T16:15:39 INFO billing-svc handled 10 reqs
+2026-07-12T11:49:24 ERROR 343 auth-svc request failed: throttled
+2026-04-19T12:40:04 INFO billing-svc handled 19 reqs
+2026-01-16T22:17:05 INFO api-gateway handled 23 reqs
+2026-08-15T08:07:01 ERROR 243 queue-worker request failed: timeout
+2026-02-24T03:18:00 INFO billing-svc handled 72 reqs
+2026-04-16T08:17:31 ERROR 542 api-gateway request failed: timeout
+2026-02-24T22:24:06 INFO api-gateway handled 10 reqs
+2026-06-20T04:59:04 INFO billing-svc handled 38 reqs
+2026-07-15T16:43:54 WARN search-svc slow query 527ms
+2026-03-12T02:35:32 ERROR 286 api-gateway request failed: timeout
+2026-09-16T22:01:02 INFO api-gateway handled 43 reqs
+2026-04-22T19:25:14 INFO api-gateway handled 1 reqs
+2026-08-28T03:51:30 WARN queue-worker slow query 606ms
+2026-06-18T20:50:59 INFO queue-worker handled 17 reqs
+2026-04-13T19:03:37 ERROR 243 search-svc request failed: 5xx
+2026-03-12T23:08:52 ERROR 286 auth-svc request failed: db down
+2026-06-10T22:20:20 INFO search-svc handled 99 reqs
+2026-09-23T06:55:14 WARN queue-worker slow query 548ms
+2026-09-20T21:08:57 INFO search-svc handled 28 reqs
+2026-01-26T16:12:12 ERROR 350 queue-worker request failed: timeout
+2026-02-13T01:29:28 INFO queue-worker handled 72 reqs
+2026-01-15T18:46:42 ERROR 350 search-svc request failed: throttled
+2026-05-22T14:24:01 ERROR 357 auth-svc request failed: throttled
+2026-09-15T05:08:48 WARN auth-svc slow query 628ms
+2026-02-16T20:56:08 INFO api-gateway handled 26 reqs
+2026-03-12T04:01:14 WARN api-gateway slow query 861ms
+2026-03-15T01:25:19 INFO billing-svc handled 20 reqs
+2026-02-12T13:21:09 WARN api-gateway slow query 79ms
+2026-05-16T01:13:20 ERROR 243 auth-svc request failed: timeout
+2026-06-21T00:06:35 INFO search-svc handled 48 reqs
+2026-07-11T16:37:41 INFO auth-svc handled 7 reqs
+2026-05-10T13:15:54 WARN search-svc slow query 167ms
+2026-07-11T17:35:17 INFO auth-svc handled 10 reqs
+2026-06-10T00:10:58 ERROR 243 auth-svc request failed: 5xx
+2026-08-21T17:37:52 INFO auth-svc handled 79 reqs
+2026-09-15T16:32:07 ERROR 535 auth-svc request failed: timeout
+2026-08-28T13:47:04 ERROR 303 api-gateway request failed: throttled
+2026-08-24T22:29:19 INFO billing-svc handled 41 reqs
+2026-02-21T15:49:50 INFO search-svc handled 72 reqs
+2026-09-21T18:56:55 ERROR 357 queue-worker request failed: 5xx
+2026-01-26T07:23:50 ERROR 512 search-svc request failed: throttled
+2026-08-25T07:12:09 INFO auth-svc handled 52 reqs
+2026-07-23T10:27:29 INFO api-gateway handled 86 reqs
+2026-07-26T04:48:46 INFO auth-svc handled 42 reqs
+2026-07-12T23:26:41 WARN search-svc slow query 361ms
+2026-04-27T07:15:18 INFO search-svc handled 96 reqs
+2026-05-12T06:11:16 ERROR 303 billing-svc request failed: db down
+2026-06-23T19:58:16 INFO api-gateway handled 64 reqs
+2026-01-15T16:24:26 WARN search-svc slow query 454ms
+2026-03-11T20:01:19 ERROR 167 billing-svc request failed: 5xx
+2026-05-14T03:15:49 ERROR 350 queue-worker request failed: db down
+2026-05-17T23:22:14 ERROR 494 auth-svc request failed: throttled
+2026-06-25T05:24:48 INFO api-gateway handled 85 reqs
+2026-08-28T21:38:58 INFO auth-svc handled 24 reqs
+2026-09-24T22:05:07 ERROR 227 api-gateway request failed: throttled
+2026-09-04T00:00:00 weird line mentioning code 503 without prefix
+corrupted log line without timestamp

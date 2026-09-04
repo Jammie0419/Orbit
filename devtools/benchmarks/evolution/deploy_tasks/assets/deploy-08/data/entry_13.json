@@ -1,0 +1,12 @@
+{
+ "id": 13,
+ "meta": {
+  "name": "webcam",
+  "region": "Shenzhen"
+ },
+ "values": {
+  "amount": 1000000,
+  "tax": 5.48,
+  "shipping": 0
+ }
+}

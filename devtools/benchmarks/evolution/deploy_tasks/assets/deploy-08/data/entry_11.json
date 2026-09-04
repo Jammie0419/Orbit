@@ -1,0 +1,12 @@
+{
+ "id": 11,
+ "meta": {
+  "name": "cable",
+  "region": "Seoul"
+ },
+ "values": {
+  "amount": 99.99,
+  "tax": 1.19,
+  "shipping": 0
+ }
+}

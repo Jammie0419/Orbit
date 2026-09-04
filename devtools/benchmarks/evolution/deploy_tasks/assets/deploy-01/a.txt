@@ -1,0 +1,80 @@
+record_001 value=3669 tag=gamma
+record_002 value=943 tag=gamma
+   
+record_004 value=5029 tag=beta
+note line 5 — free text 16
+   
+note line 7 — free text 44
+
+record_009 value=4181 tag=gamma
+record_010 value=4368 tag=alpha
+   
+note line 12 — free text 81
+record_013 value=203 tag=gamma
+record_014 value=803 tag=beta
+record_015 value=8319 tag=gamma
+   
+record_017 value=2175 tag=beta
+record_018 value=476 tag=beta
+note line 19 — free text 26
+
+record_021 value=5550 tag=beta
+record_022 value=8193 tag=alpha
+record_023 value=3547 tag=beta
+record_024 value=7170 tag=beta
+record_025 value=4714 tag=gamma
+record_026 value=6654 tag=alpha
+record_027 value=2167 tag=beta
+note line 28 — free text 68
+
+note line 30 — free text 96
+record_031 value=9211 tag=gamma
+record_032 value=2257 tag=alpha
+note line 33 — free text 27
+note line 34 — free text 70
+record_035 value=514 tag=gamma
+record_036 value=9201 tag=beta
+record_037 value=3059 tag=beta
+record_038 value=7564 tag=gamma
+   
+
+
+   
+
+record_044 value=3840 tag=alpha
+record_045 value=8327 tag=beta
+note line 46 — free text 11
+record_047 value=9235 tag=alpha
+record_048 value=2491 tag=beta
+   
+record_050 value=8079 tag=alpha
+record_051 value=3466 tag=alpha
+note line 52 — free text 54
+note line 53 — free text 92
+record_054 value=5226 tag=gamma
+record_055 value=6054 tag=gamma
+record_056 value=2835 tag=gamma
+record_057 value=9329 tag=beta
+note line 58 — free text 52
+record_059 value=6240 tag=alpha
+record_060 value=4073 tag=gamma
+record_061 value=1934 tag=beta
+record_062 value=6380 tag=alpha
+record_063 value=298 tag=alpha
+
+record_065 value=6846 tag=gamma
+note line 66 — free text 23
+record_067 value=8983 tag=alpha
+record_068 value=6614 tag=alpha
+record_069 value=6208 tag=gamma
+record_070 value=6166 tag=alpha
+record_071 value=6199 tag=alpha
+note line 72 — free text 47
+
+   
+
+record_076 value=7656 tag=beta
+record_077 value=1346 tag=gamma
+record_078 value=826 tag=alpha
+record_079 value=5193 tag=gamma
+record_080 value=1229 tag=alpha

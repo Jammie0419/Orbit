@@ -1,0 +1,95 @@
+{
+  "_comment": "部署期固定任务集（spec 部署期设计，V2/V3 同集同序）。shared 为通用任务，每技能另加 hard 变体（生成时按技能 when_to_use 补充）。与 GAIA/TB 题面零重叠。",
+  "shared": [
+    {
+      "id": "deploy-01",
+      "text": "使用你已启用的技能 <name>：把目录里所有 .txt 文件中的空行删除，并报告每个文件处理前/后的行数",
+      "skill_hint": "<name>",
+      "difficulty": "easy"
+    },
+    {
+      "id": "deploy-02",
+      "text": "使用你已启用的技能 <name>：把 CSV 文件 data.csv 的列内容做小写化清洗，另存为 cleaned.csv，并给出各列非空计数",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-03",
+      "text": "使用你已启用的技能 <name>：找到目录下最大的 3 个文件，按大小降序列出路径和字节数，输出到 report.txt",
+      "skill_hint": "<name>",
+      "difficulty": "easy"
+    },
+    {
+      "id": "deploy-04",
+      "text": "使用你已启用的技能 <name>：把 notes/ 目录下所有 .md 文件中的含 TODO 的行抽取出来，按文件名分组写入 todo_summary.md",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-05",
+      "text": "使用你已启用的技能 <name>：把 images/ 目录下所有图片文件（.jpg/.jpeg/.png）重命名为带日期前缀的格式，并输出重命名映射表",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-06",
+      "text": "使用你已启用的技能 <name>：解析 logs/app.log 中形如 \"ERROR <code>\" 的行，统计每种 code 的出现次数并降序输出",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-07",
+      "text": "使用你已启用的技能 <name>：把两个目录 a/ 与 b/ 中的同名文件合并内容（a 内容在前），输出到 merged/",
+      "skill_hint": "<name>",
+      "difficulty": "hard"
+    },
+    {
+      "id": "deploy-08",
+      "text": "使用你已启用的技能 <name>：从 data/ 下的多个 .json 文件中汇总所有数字字段的和，输出汇总值",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-09",
+      "text": "使用你已启用的技能 <name>：把 sentences.txt 中每一行的首字母大写化，同时保留原有换行结构，输出到 titled.txt",
+      "skill_hint": "<name>",
+      "difficulty": "easy"
+    },
+    {
+      "id": "deploy-10",
+      "text": "使用你已启用的技能 <name>：检查 config.ini 中是否有重复的 section 名，有则合并并标记合并来源",
+      "skill_hint": "<name>",
+      "difficulty": "hard"
+    },
+    {
+      "id": "deploy-11",
+      "text": "使用你已启用的技能 <name>：把 arch/ 目录下所有 .tar.gz 解压到 extracted/，并对每个压缩包列出解压后的顶层条目数",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-12",
+      "text": "使用你已启用的技能 <name>：统计 url_links.txt 中每个域名的链接数量，输出域名排行 top10",
+      "skill_hint": "<name>",
+      "difficulty": "medium"
+    },
+    {
+      "id": "deploy-hard-empty",
+      "text": "调用你已启用的技能 <name>：清空输入场景：输入目录不存在或为空时调用该技能，预期给出明确错误信息而不是崩溃",
+      "skill_hint": "<name>",
+      "difficulty": "hard"
+    },
+    {
+      "id": "deploy-hard-oversize",
+      "text": "调用你已启用的技能 <name>：超长输入场景：构造 >20MB 的输入文件调用该技能，验证截断或分块处理，不崩溃且报告处理结果",
+      "skill_hint": "<name>",
+      "difficulty": "hard"
+    },
+    {
+      "id": "deploy-hard-illformed",
+      "text": "调用你已启用的技能 <name>：非法输入场景：输入文件编码损坏/格式不符时调用该技能，预期优雅报错并给出可执行的修复建议",
+      "skill_hint": "<name>",
+      "difficulty": "hard"
+    }
+  ]
+}

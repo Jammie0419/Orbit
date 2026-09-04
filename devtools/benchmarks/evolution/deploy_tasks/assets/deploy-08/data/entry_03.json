@@ -1,0 +1,12 @@
+{
+ "id": 3,
+ "meta": {
+  "name": "dock",
+  "region": "London"
+ },
+ "values": {
+  "amount": 17,
+  "tax": 1.02,
+  "shipping": 15.5
+ }
+}

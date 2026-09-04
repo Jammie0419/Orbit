@@ -1,0 +1,12 @@
+{
+ "id": 4,
+ "meta": {
+  "name": "cable",
+  "region": "Paris"
+ },
+ "values": {
+  "amount": -3,
+  "tax": 7.79,
+  "shipping": null
+ }
+}

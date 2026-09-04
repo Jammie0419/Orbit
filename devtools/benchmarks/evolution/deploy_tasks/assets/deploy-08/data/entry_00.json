@@ -1,0 +1,12 @@
+{
+ "id": 0,
+ "meta": {
+  "name": "charger",
+  "region": "Shanghai"
+ },
+ "values": {
+  "amount": 0,
+  "tax": 6.62,
+  "shipping": 15.5
+ }
+}

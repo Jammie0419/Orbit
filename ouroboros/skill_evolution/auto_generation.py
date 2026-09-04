@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # Data-plane buckets; "self" is a generic grouping container that discovery
 # walks (see _walk_skill_packages) and the markers classify as self_authored.
 SELF_BUCKET = "self"
-MIN_TOOL_CALLS = 5
+MIN_TOOL_CALLS = 8  # 语料校准（2026-09-05）：130 条全 C 语料 n_calls 分布 P50=8/P75=14/均值 13.8；与自修复+成功双门槛组合，适配轨迹规模候选 ≈1/3（43 条），避免门槛过低导致的技能膨胀
 MAX_TAGS = 8
 GENERATION_HISTORY_REL = pathlib.Path("state") / "skill_generation_history.jsonl"
 

@@ -1,0 +1,12 @@
+{
+ "id": 10,
+ "meta": {
+  "name": "stand",
+  "region": "Berlin"
+ },
+ "values": {
+  "amount": -3,
+  "tax": 9.38,
+  "shipping": 0
+ }
+}

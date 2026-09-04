@@ -5,7 +5,12 @@ Input : a directory of GAIA run outputs produced by ``run_gaia.py`` (ouroboros
         headless runs wrapped by inspect_ai): one subdirectory per run, each
         containing ``inspect_logs/*.json`` (authoritative scoring),
         ``ouroboros_data/`` (traces) and ``samples/<uuid>/result.json``
-        (task-side records). ``--pack-source`` prepares a trimmed copy of this
+        (task-side records). Also accepts a **single consolidated/merged run
+        directory** (e.g. the refined ``ouroboros_v0_merged_mimo`` snapshot,
+        whose ``inspect_logs/`` sits at the root): there, per-task traces are
+        resolved through ``samples/<uuid>/result.json`` → ``child_drive_root``
+        → the source run's per-task drive (the ``child_drive_tools`` chain).
+        ``--pack-source`` prepares a trimmed copy of this
         input (extraction-only files, no API keys) for another host.
 Output: the evolution corpus consumed by the offline-replay pipeline
         (EVOLUTION_EXPERIMENT_SPEC.md §1)::
@@ -21,16 +26,21 @@ Pipeline of the script:
      latest ``started_at``) — repeat runs of the same GAIA task collapse to a
      single record;
   3. resolve each task's tool trace (per-task ``tools.jsonl``, then the global
-     per-run ``tools.jsonl`` filtered by task id, then a last-resort
-     reconstruction from the inspect ``messages``);
+     per-run ``tools.jsonl`` filtered by task id, then the consolidated-merge
+     ``child_drive_tools`` chain, then a last-resort reconstruction from the
+     inspect ``messages``);
   4. tag tasks with capability labels from GAIA annotator metadata plus the
      tool names actually used in the trace;
-  5. select the corpus by constrained greedy sampling: hard level×outcome
-     allocation (12/20/8 across levels; 14 failed / 26 passed), capability
-     coverage quotas per tag, recovery-rich traces preferred, deterministic
-     seed;
+  5. select the corpus by constrained greedy sampling over the **passed
+     pool** (``--outcome-filter passed`` is the default → success-only
+     evolution corpus, failed_count forced to 0; ``all`` restores mixed
+     outcome with ``--failed-count``), hard level allocation (for the full
+     130-C success set this is naturally 43/70/17), capability coverage
+     quotas per tag, recovery-rich traces preferred, deterministic seed;
   6. write corpus + traces + stats, then validate every record locally
-     (spec §10.6 ``load_trace_from_path`` semantics) at zero LLM cost.
+     (spec §10.6 ``load_trace_from_path`` semantics) at zero LLM cost;
+     ``--verify-csv`` optionally cross-checks the selected uuid set against
+     the merged snapshot's ``summary.csv`` C rows.
 
 The script is read-only w.r.t. the runs root: it never reads ``settings.json``
 (plaintext API keys) and never touches ``observability/`` blobs.
@@ -148,7 +158,21 @@ def parse_inspect_log(log_path: pathlib.Path) -> list[dict]:
 
 
 def scan_runs(runs_root: pathlib.Path) -> list[dict]:
+    """Enumerate run records.
+
+    两种形态：① 多 run 目录（runs_root 下每个子目录含 inspect_logs/）；
+    ② 单 run / consolidated 目录（runs_root 自身含 inspect_logs/，如合并提纯
+    后的 ouroboros_v0_merged_mimo 快照）。
+    """
     records = []
+    if (runs_root / "inspect_logs").is_dir():
+        logs = sorted((runs_root / "inspect_logs").glob("*.json"))
+        for lp in logs:
+            for rec in parse_inspect_log(lp):
+                rec["run"] = runs_root.name
+                rec["run_dir"] = runs_root
+                records.append(rec)
+        return records
     for run_dir in sorted(p for p in runs_root.iterdir() if p.is_dir()):
         logs = sorted((run_dir / "inspect_logs").glob("*.json")) if (run_dir / "inspect_logs").is_dir() else []
         for lp in logs:
@@ -292,6 +316,41 @@ def result_json_data(run_dir: pathlib.Path, uuid: str) -> dict | None:
         return None
 
 
+_CHILD_DRIVE_CACHE: dict[str, pathlib.Path | None] = {}
+
+
+def _child_drive_root(run_dir: pathlib.Path, uuid: str) -> pathlib.Path | None:
+    """Consolidated/merged 模式的 trace 定位：samples/<uuid>/result.json 的
+    ``child_drive_root``（绝对路径，指向源段 per-task drive，含
+    logs/tools.jsonl 与 task_results/<hex>.json）。本 run 自带
+    ouroboros_data/ 时返回 None（走原有链）。"""
+    if (run_dir / "ouroboros_data").is_dir():
+        return None
+    key = f"{run_dir}|{uuid}"
+    if key in _CHILD_DRIVE_CACHE:
+        return _CHILD_DRIVE_CACHE[key]
+    rj = result_json_data(run_dir, uuid)
+    raw = str((rj or {}).get("child_drive_root") or "").strip()
+    drive = pathlib.Path(raw) if raw else None
+    if drive is not None and not drive.is_dir():
+        drive = None
+    _CHILD_DRIVE_CACHE[key] = drive
+    return drive
+
+
+def _child_task_record(drive_root: pathlib.Path, hex_id: str) -> dict:
+    """child drive 内的 task_results/<hex>.json（trace_summary/trace_refs/
+    cost/review_evidence），consolidated 模式的 task_records 来源。"""
+    p = drive_root / "task_results" / f"{hex_id}.json"
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8-sig"))
+        return d if isinstance(d, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # production-grade trace reconstruction
 #
@@ -322,11 +381,16 @@ def trace_safe_id(corpus_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(corpus_id)).strip("_") or "unknown"
 
 
+# 额外 observability 索引根（--obs-roots）：consolidated/merged 模式下列出
+# 源段根目录，把各源段的 observability 全量 payload 并入索引，恢复生产级重建。
+_OBS_EXTRA_ROOTS: list[pathlib.Path] = []
+
+
 class _ObservabilityIndex:
     """Per-run content-addressed index of observability blobs + call manifests.
 
     ``_build`` 每个 run 只跑一次（缓存），覆盖 run 根与 headless 子任务
-    各自的 observability 目录。"""
+    各自的 observability 目录，以及 ``_OBS_EXTRA_ROOTS`` 指向的外部根。"""
     def __init__(self, run_dir: pathlib.Path):
         self.run_dir = run_dir
         self.blobs: dict[str, pathlib.Path] = {}
@@ -346,6 +410,19 @@ class _ObservabilityIndex:
         if ht_root.is_dir():
             for hd in ht_root.iterdir():
                 self._index_obs_dir(hd / "data" / "observability")
+        self._index_extra_roots()
+
+    def _index_extra_roots(self) -> None:
+        for extra in _OBS_EXTRA_ROOTS:
+            self._index_obs_dir(extra / "observability")
+            ouro = extra / "ouroboros_data"
+            self._index_obs_dir(ouro / "observability")
+            if (ouro / "state").is_dir():
+                self._index_obs_dir(ouro / "state" / "observability")
+                ht_root = ouro / "state" / "headless_tasks"
+                if ht_root.is_dir():
+                    for hd in ht_root.iterdir():
+                        self._index_obs_dir(hd / "data" / "observability")
 
     def _index_obs_dir(self, obs_dir: pathlib.Path) -> None:
         blobs_dir = obs_dir / "blobs"
@@ -474,16 +551,21 @@ def _reconstruct_call(line: dict, payload: dict | None) -> dict:
 
 
 def _reconstruct_reasoning_notes(run_dir: pathlib.Path, hex_id: str,
-                                 index: _ObservabilityIndex, llm_call_refs: list) -> list[str]:
+                                 index: _ObservabilityIndex, llm_call_refs: list,
+                                 events_logs_dir: pathlib.Path | None = None) -> list[str]:
     """每轮无工具调用的纯文本回复 → reasoning_notes（对齐 loop._handle_text_response）。
 
     顺序权威源：per-task events.jsonl 的 llm_round 行（时间序、带 response_ref）；
-    兜底：task record 的 trace_refs.llm_call_refs。"""
+    兜底：task record 的 trace_refs.llm_call_refs。consolidated/merged 模式下
+    events.jsonl 位于 child drive（``events_logs_dir`` 传入）。"""
     if not hex_id:
         return []
     notes: list[str] = []
     seen_msgs: set[str] = set()
-    hd_logs = run_dir / "ouroboros_data" / "state" / "headless_tasks" / hex_id / "data" / "logs"
+    if events_logs_dir is not None:
+        hd_logs = events_logs_dir
+    else:
+        hd_logs = run_dir / "ouroboros_data" / "state" / "headless_tasks" / hex_id / "data" / "logs"
     refs: list[dict] = []
     for row in _read_jsonl(hd_logs / "events.jsonl"):
         if row.get("type") == "llm_round" and isinstance(row.get("response_ref"), dict):
@@ -547,19 +629,36 @@ def resolve_trace(rec: dict) -> dict:
     reconstruction, usage, review_evidence}``；observability 全量 payload
     可得时 tool_calls 为生产级 entry（完整 result 的生产视图 + result_meta），
     否则降级为 tools.jsonl 的 2000 字符视图并如实标注 reconstruction。
+
+    consolidated/merged 模式（本 run 无 ouroboros_data/）：hex_id 由
+    samples/<uuid>/result.json 的 root_task_id/task_id 给出，轨迹行与任务
+    记录从 ``child_drive_root`` 指向的源段 per-task drive 读取，来源标记
+    ``child_drive_tools``。
     """
     run_dir = rec["run_dir"]
     hex_id = find_task_hex(rec["uuid"], run_dir, rec["question"])
+    child_drive = _child_drive_root(run_dir, rec["uuid"])
+    if child_drive is not None and not hex_id:
+        rj = result_json_data(run_dir, rec["uuid"])
+        hex_id = str((rj or {}).get("task_id") or "").strip() or None
     calls: list[dict] = []
     source = "none"
     index = _obs_index(run_dir)
-    task_record = _task_result_record(run_dir, hex_id) if hex_id else {}
+    task_record = {}
+    if hex_id:
+        if (run_dir / "ouroboros_data").is_dir():
+            task_record = _task_result_record(run_dir, hex_id)
+        elif child_drive is not None:
+            task_record = _child_task_record(child_drive, hex_id)
 
     if hex_id:
         per_task = run_dir / "ouroboros_data" / "state" / "headless_tasks" / hex_id / "data" / "logs" / "tools.jsonl"
         if per_task.is_file():
             source = "headless_tools"
             calls = per_task_lines(per_task)
+        elif child_drive is not None:
+            calls = [c for c in per_task_lines(child_drive / "logs" / "tools.jsonl") if c.get("task_id") == hex_id]
+            source = "child_drive_tools" if calls else "none"
         else:
             glob_log = run_dir / "ouroboros_data" / "logs" / "tools.jsonl"
             calls = [c for c in per_task_lines(glob_log) if c.get("task_id") == hex_id]
@@ -597,10 +696,14 @@ def resolve_trace(rec: dict) -> dict:
             rec.setdefault("extra_rounds", rj.get("total_rounds"))
 
     llm_call_refs = (task_record.get("trace_refs") or {}).get("llm_call_refs") or []
-    reasoning_notes = _reconstruct_reasoning_notes(run_dir, hex_id, index, llm_call_refs)
+    if child_drive is not None:
+        reasoning_notes = _reconstruct_reasoning_notes(run_dir, hex_id, index, llm_call_refs,
+                                                       events_logs_dir=child_drive / "logs")
+    else:
+        reasoning_notes = _reconstruct_reasoning_notes(run_dir, hex_id, index, llm_call_refs)
     notes_source = "llm_response_blobs" if reasoning_notes else "none"
 
-    if source in ("headless_tools", "global_tools"):
+    if source in ("headless_tools", "global_tools", "child_drive_tools"):
         src = "observability_blobs" if calls_full else "tools_jsonl"
         if calls_full and calls_full < len(recovered_calls):
             src = "observability_blobs_partial"
@@ -781,14 +884,19 @@ def allocate(counts: dict, n: int) -> dict:
 
 
 def select_corpus(tasks: list[dict], size: int, failed_count: int, quota: int, min_calls: int, seed: int) -> tuple[list[dict], list[str]]:
-    """Constrained greedy selection; returns (selected tasks, warnings)."""
+    """Constrained greedy selection; returns (selected tasks, warnings).
+
+    层级分配按**全量** passed/failed 任务计数（如全成功 130 → 43/70/17），
+    min_calls 只作用于候选池；候选池耗尽时松弛（去 min_calls 过滤）补齐。"""
     warnings: list[str] = []
     failed_pool = {lvl: [t for t in tasks if not t["passed"] and t["level"] == lvl and t["n_calls"] >= min_calls]
                    for lvl in (1, 2, 3)}
     passed_pool = {lvl: [t for t in tasks if t["passed"] and t["level"] == lvl and t["n_calls"] >= min_calls]
                    for lvl in (1, 2, 3)}
-    failed_alloc = allocate({lvl: len(v) for lvl, v in failed_pool.items()}, failed_count)
-    passed_alloc = allocate({lvl: len(v) for lvl, v in passed_pool.items()}, size - failed_count)
+    failed_alloc = allocate({lvl: sum(1 for t in tasks if not t["passed"] and t["level"] == lvl) for lvl in (1, 2, 3)},
+                            failed_count)
+    passed_alloc = allocate({lvl: sum(1 for t in tasks if t["passed"] and t["level"] == lvl) for lvl in (1, 2, 3)},
+                            size - failed_count)
     allocations = {(lvl, False): failed_alloc.get(lvl, 0) for lvl in (1, 2, 3)}
     allocations.update({(lvl, True): passed_alloc.get(lvl, 0) for lvl in (1, 2, 3)})
 
@@ -1121,7 +1229,8 @@ def build_stats(tasks: list[dict], selected: list[dict], records: list[dict], ou
     A(f"- 生成时间: {_dt.datetime.now().isoformat(timespec='seconds')}")
     A(f"- 数据源: `{args.runs_root}`（{len(set(r['run'] for r in records))} 个 run, 共 {len(records)} 条样本记录）")
     A(f"- 输出目录: `{out_dir}`")
-    A(f"- 选择参数: size={args.size}, failed={args.failed_count}, min_calls={args.min_calls}, "
+    A(f"- 选择参数: size={args.size}, outcome={args.outcome_filter}, failed={args.failed_count}, "
+      f"min_calls={args.min_calls}, "
       f"tag quota={args.quota}, seed={args.seed}\n")
     A(f"## A. 去重统计（按 uuid, best=C>I>None, 平局取最新）")
     by_uuid = defaultdict(list)
@@ -1152,18 +1261,30 @@ def build_stats(tasks: list[dict], selected: list[dict], records: list[dict], ou
         ev = t.get("eval_tool_calls")
         A(f"  - {t['id']} {t['uuid']} L{t['level']} {'✓' if t['passed'] else '✗'} "
           f"eval_tool_calls={ev} {repr(t['question'][:60])}")
+    A(f"- 含自修复(recovery)任务: {sum(1 for t in tasks if t['n_recovered'] > 0)}/{len(tasks)}"
+      f"（错误→修复模式，技能生成门槛与失败素材的来源）")
+    calls_dist = Counter(
+        "<5" if t["n_calls"] < 5 else ("5-9" if t["n_calls"] < 10 else ("10-19" if t["n_calls"] < 20 else ">=20"))
+        for t in tasks)
+    A("- n_calls 分布: " + ", ".join(f"{band}={calls_dist[band]}" for band in ("<5", "5-9", "10-19", ">=20")))
     A("")
-    A("## C. 失败任务明细（35 个 best-I；trace_ok=轨迹可用）")
-    A("| id | uuid | level | n_calls | n_errors | trace | 抽入语料 |")
-    A("|---|---|---|---|---|---|---|")
-    sel_ids = {t["uuid"] for t in selected}
-    for t in tasks:
-        if t["passed"]:
-            continue
-        A(f"| {t['id']} | `{t['uuid']}` | {t['level']} | {t['n_calls']} | {t['n_errors']} | "
-          f"{'✓' if t['n_calls'] else '✗'} | {'✓' if t['uuid'] in sel_ids else ''} |")
+    A("## C. 未入选任务概要")
+    A(f"- best-I 任务: {sum(1 for t in tasks if not t['passed'])} 条"
+      f"（L1/L2/L3: "
+      + "/".join(str(sum(1 for t in tasks if not t['passed'] and t['level'] == lvl)) for lvl in (1, 2, 3))
+      + "）；全成功模式（--outcome-filter passed）下不入选；"
+        "如需混合语料用 --outcome-filter all 并指定 --failed-count")
+    if args.outcome_filter == "all":
+        A("| id | uuid | level | n_calls | n_errors | trace | 抽入语料 |")
+        A("|---|---|---|---|---|---|---|")
+        sel_ids = {t["uuid"] for t in selected}
+        for t in tasks:
+            if t["passed"]:
+                continue
+            A(f"| {t['id']} | `{t['uuid']}` | {t['level']} | {t['n_calls']} | {t['n_errors']} | "
+              f"{'✓' if t['n_calls'] else '✗'} | {'✓' if t['uuid'] in sel_ids else ''} |")
     A("")
-    A("## D. 语料选择清单（40 条，顺序 = 喂料顺序）")
+    A(f"## D. 语料选择清单（{len(selected)} 条，顺序 = 喂料顺序）")
     A("| id | level | 成败 | tags | n_calls | n_err | n_rec | trace 源 |")
     A("|---|---|---|---|---|---|---|---|")
     for t in selected:
@@ -1215,7 +1336,11 @@ def validate_corpus(out_dir: pathlib.Path, selected: list[dict], size: int, fail
         # spec §10.6 form (b): {"tool_calls": [...]} consumed as-is
         calls = data.get("tool_calls")
         if not isinstance(calls, list) or not calls:
-            errors.append(f"trace {safe} empty tool_calls")
+            notes = data.get("reasoning_notes") or []
+            if isinstance(notes, list) and notes:
+                # 零工具直接作答任务：无工具轨迹但保留反思文本，零成本合法
+                continue
+            errors.append(f"trace {safe} empty tool_calls and no reasoning_notes")
             continue
         if any(not isinstance(c, dict) or not c.get("tool") for c in calls):
             errors.append(f"trace {safe} malformed tool_call")
@@ -1258,7 +1383,7 @@ def validate_corpus(out_dir: pathlib.Path, selected: list[dict], size: int, fail
         for e in errors[:20]:
             lines.append(f"  - {e}")
     else:
-        lines.append("- ✅ 全部校验通过：40 条 id 唯一（含安全命名）、trace_ref 全部存在且可回读、"
+        lines.append(f"- ✅ 全部校验通过：{len(selected)} 条 id 唯一（含安全命名）、trace_ref 全部存在且可回读、"
                      "生产级字段（reasoning_notes/trace_summary/meta.usage）齐全、分布符合分配。")
     return {"lines": lines, "errors": errors}
 
@@ -1278,14 +1403,28 @@ def main() -> int:
                     help="Output directory (default <repo>/bench_runs/evolution_corpus)")
     ap.add_argument("--date", default=_dt.date.today().isoformat())
     ap.add_argument("--size", type=int, default=40, help="Corpus size (spec: 30~40)")
-    ap.add_argument("--failed-count", type=int, default=14, help="Number of failed records (spec: >= 1/3)")
+    ap.add_argument("--outcome-filter", choices=("all", "passed"), default="passed",
+                    help="语料结果过滤：passed=仅成功任务（默认，强制 failed-count=0，"
+                         "全成功进化语料）；all=成败混合（用 --failed-count 控制失败条数）")
+    ap.add_argument("--failed-count", type=int, default=14, help="Number of failed records (spec: >= 1/3; "
+                                                                 "ignored when --outcome-filter passed)")
     ap.add_argument("--min-calls", type=int, default=3, help="Minimum tool calls for a usable trace")
     ap.add_argument("--quota", type=int, default=4, help="Minimum selected count per capability tag")
     ap.add_argument("--seed", type=int, default=20260829)
+    ap.add_argument("--obs-roots", type=pathlib.Path, nargs="*", default=None,
+                    help="(可多次/空格分隔) 源段根目录列表：把它们各段 observability blobs 并入索引，"
+                         "用于 consolidated/merged 模式下的生产级全量 payload 重建")
+    ap.add_argument("--verify-csv", type=pathlib.Path, default=None,
+                    help="(可选) merged 提纯目录的 summary.csv：校验产出 uuid 集与 verdict==C 的 "
+                         "task_id 集完全一致，不一致即报错退出")
     args = ap.parse_args()
     if not args.runs_root or not pathlib.Path(args.runs_root).is_dir():
         print(f"error: --runs-root must point to the GAIA runs directory; got {args.runs_root!r}", file=sys.stderr)
         return 2
+    if args.outcome_filter == "passed":
+        args.failed_count = 0  # 全成功语料：失败条数恒为 0（select/validate 目标随之归零）
+    if args.obs_roots:
+        _OBS_EXTRA_ROOTS.extend(p for p in args.obs_roots if p.is_dir())
 
     runs_root = pathlib.Path(args.runs_root)
     if args.pack_source is not None:
@@ -1390,6 +1529,33 @@ def main() -> int:
     print(f"      {corpus_path}  ({len(selected)} lines)")
     print(f"      {traces_dir}  ({len(selected)} trace files)")
     print(f"      {backups_dir}  (原始数据备份: tools.jsonl/task_result/blobs)")
+
+    if args.verify_csv is not None:
+        print(f"[5.5/6] verifying uuid set against {args.verify_csv} ...")
+        try:
+            rows = args.verify_csv.read_text(encoding="utf-8-sig").splitlines()
+            header = [h.strip() for h in rows[0].split(",")]
+            v_idx = header.index("verdict")
+            t_idx = header.index("task_id")
+            verdict_c = {cols[t_idx].strip() for cols in (line.split(",") for line in rows[1:])
+                         if len(cols) > max(v_idx, t_idx) and cols[v_idx].strip() == "C"}
+        except (OSError, ValueError, IndexError) as exc:
+            print(f"      ! verify-csv 读取失败: {exc}", file=sys.stderr)
+            return 1
+        if not verdict_c:
+            print("      ! summary.csv 中无 verdict==C 行", file=sys.stderr)
+            return 1
+        sel_uuids = {t["uuid"] for t in selected}
+        missing = verdict_c - sel_uuids
+        extra = sel_uuids - verdict_c
+        if missing or extra:
+            print(f"      ✗ 与提纯清单不一致: 缺 {len(missing)} 个 C、多 {len(extra)} 个非 C/未列入", file=sys.stderr)
+            for u in sorted(missing)[:10]:
+                print(f"        - 缺: {u}", file=sys.stderr)
+            for u in sorted(extra)[:10]:
+                print(f"        - 多: {u}", file=sys.stderr)
+            return 1
+        print(f"      ✓ {len(sel_uuids)} 条 uuid 与 summary.csv 的 C 集完全一致")
 
     print("[6/6] validating and writing stats ...")
     stats = build_stats(tasks, selected, records, out_dir, args)
