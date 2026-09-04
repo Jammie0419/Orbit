@@ -49,16 +49,34 @@ def write(rel: str, content, *, binary: bool = False) -> None:
         p.write_text(content, encoding="utf-8")
 
 
-def png_1x1(rgb: tuple[int, int, int]) -> bytes:
-    """zlib 手写合法 1x1 PNG（无第三方依赖）。"""
+def png_rgb(w: int, h: int, pixel_fn) -> bytes:
+    """zlib 手写合法 RGBA/RGB PNG（无第三方依赖）；pixel_fn(x, y) -> (r, g, b)。"""
     def chunk(typ: bytes, data: bytes) -> bytes:
         c = struct.pack(">I", len(data)) + typ + data
         return c + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
-    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + bytes(v for x in range(w) for v in pixel_fn(x, y)) for y in range(h))
     return (b"\x89PNG\r\n\x1a\n"
             + chunk(b"IHDR", ihdr)
-            + chunk(b"IDAT", zlib.compress(b"\x00" + bytes(rgb)))
+            + chunk(b"IDAT", zlib.compress(raw))
             + chunk(b"IEND", b""))
+
+
+def png_gradient(w: int = 64, h: int = 64) -> bytes:
+    """对角渐变图（有视觉信息、可解码、view_image 可见图案）。"""
+    return png_rgb(w, h, lambda x, y: (x * 4 % 256, y * 4 % 256, (x + y) * 2 % 256))
+
+
+def png_checker(w: int = 64, h: int = 64) -> bytes:
+    """棋盘格图（高频对比图案）。"""
+    return png_rgb(w, h, lambda x, y: ((255, 255, 255) if (x // 8 + y // 8) % 2 == 0 else (20, 40, 90)))
+
+
+def png_noise(w: int = 64, h: int = 64, seed: int = 1) -> bytes:
+    """确定性噪点图（纹理）。"""
+    rnd = random.Random(seed)
+    grid = [[(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)) for _ in range(w)] for _ in range(h)]
+    return png_rgb(w, h, lambda x, y: grid[y][x])
 
 
 def make_tar_gz(name: str, entries: list[tuple[str, str]]) -> bytes:
@@ -177,17 +195,14 @@ def gen_04() -> None:
 # ---------------------------------------------------------------------------
 
 def gen_05() -> None:
-    colors = [(210, 30, 30), (30, 210, 60), (30, 90, 210), (240, 200, 10)]
+    """12 张 64x64 真实图案 PNG（渐变/棋盘/噪点三类，均可解码、view_image 可见
+    内容、重命名任务不依赖解码）。"""
+    makers = [(png_gradient, "gradient"), (png_checker, "checker"), (png_noise, "noise")]
     for i in range(12):
-        if i % 4 == 3:
-            # JPEG：合法魔数 + 填充（重命名任务不需要解码；agent 用 view_image 时
-            # 只能识别这一张为无效 JPEG —— 属预期边界）
-            data = b"\xff\xd8\xff\xe0" + bytes(rng.randrange(256) for _ in range(64))
-            name = f"shot_{rng.randint(1000, 9999)}.{rng.choice(['jpg', 'jpeg'])}"
-            write(f"deploy-05/images/{name}", data, binary=True)
-        else:
-            write(f"deploy-05/images/img_{i:03d}.png", png_1x1(rng.choice(colors)),
-                  binary=True)
+        maker, kind = makers[i % len(makers)]
+        data = maker(seed=100 + i) if kind == "noise" else maker()
+        name = f"img_{i:03d}_{kind}.png"
+        write(f"deploy-05/images/{name}", data, binary=True)
 
 
 # ---------------------------------------------------------------------------

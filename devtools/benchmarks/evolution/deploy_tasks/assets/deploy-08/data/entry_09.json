@@ -1,12 +1,12 @@
 {
  "id": 9,
  "meta": {
-  "name": "hub",
-  "region": "Paris"
+  "name": "dock",
+  "region": "Beijing"
  },
  "values": {
-  "amount": 17,
-  "tax": 2.47,
-  "shipping": null
+  "amount": 1000000,
+  "tax": 5.85,
+  "shipping": 5
  }
 }

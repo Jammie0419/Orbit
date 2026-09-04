@@ -1,12 +1,12 @@
 {
  "id": 7,
  "meta": {
-  "name": "mic",
-  "region": "Singapore"
+  "name": "cable",
+  "region": "Seoul"
  },
  "values": {
-  "amount": 1000000,
-  "tax": 9.78,
-  "shipping": 15.5
+  "amount": 17,
+  "tax": 0.24,
+  "shipping": null
  }
 }

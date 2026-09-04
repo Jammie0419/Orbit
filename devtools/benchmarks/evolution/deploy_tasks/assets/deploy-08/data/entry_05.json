@@ -1,12 +1,12 @@
 {
  "id": 5,
  "meta": {
-  "name": "webcam",
-  "region": "Seoul"
+  "name": "headset",
+  "region": "Shanghai"
  },
  "values": {
-  "amount": 17,
-  "tax": 5.49,
-  "shipping": null
+  "amount": -3,
+  "tax": 2.18,
+  "shipping": 5
  }
 }

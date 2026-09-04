@@ -2,11 +2,11 @@
  "id": 8,
  "meta": {
   "name": "stand",
-  "region": "Berlin"
+  "region": "Beijing"
  },
  "values": {
-  "amount": 17,
-  "tax": 8.57,
-  "shipping": 5
+  "amount": -3,
+  "tax": 0.43,
+  "shipping": 15.5
  }
 }

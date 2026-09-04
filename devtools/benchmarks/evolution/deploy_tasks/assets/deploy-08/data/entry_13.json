@@ -1,12 +1,12 @@
 {
  "id": 13,
  "meta": {
-  "name": "webcam",
-  "region": "Shenzhen"
+  "name": "mic",
+  "region": "Singapore"
  },
  "values": {
-  "amount": 1000000,
-  "tax": 5.48,
+  "amount": 99.99,
+  "tax": 3.75,
   "shipping": 0
  }
 }

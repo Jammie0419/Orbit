@@ -1,12 +1,12 @@
 {
  "id": 10,
  "meta": {
-  "name": "stand",
-  "region": "Berlin"
+  "name": "speaker",
+  "region": "London"
  },
  "values": {
-  "amount": -3,
-  "tax": 9.38,
+  "amount": 12.5,
+  "tax": 0.53,
   "shipping": 0
  }
 }

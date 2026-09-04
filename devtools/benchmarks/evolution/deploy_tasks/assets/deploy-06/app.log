@@ -1,4 +1,34 @@
-2026-07-18T18:02:51 ERROR 104 search-svc request failed: timeout
+2026-06-17T01:10:51 INFO api-gateway handled 15 reqs
+2026-06-21T14:02:17 WARN api-gateway slow query 600ms
+2026-08-23T09:32:06 ERROR 542 queue-worker request failed: throttled
+2026-04-26T11:35:57 ERROR 104 billing-svc request failed: 5xx
+2026-03-11T00:44:33 INFO api-gateway handled 45 reqs
+2026-02-28T10:51:46 WARN queue-worker slow query 285ms
+2026-08-28T04:23:32 ERROR 167 auth-svc request failed: throttled
+2026-01-23T09:49:08 ERROR 499 billing-svc request failed: throttled
+2026-07-13T04:35:54 ERROR 357 api-gateway request failed: throttled
+2026-09-23T09:05:56 WARN api-gateway slow query 390ms
+2026-03-20T10:02:56 ERROR 286 api-gateway request failed: throttled
+2026-09-22T09:10:46 INFO billing-svc handled 74 reqs
+2026-02-11T03:13:09 ERROR 542 billing-svc request failed: 5xx
+2026-07-14T14:42:30 ERROR 303 search-svc request failed: timeout
+2026-05-12T09:18:32 INFO billing-svc handled 5 reqs
+2026-06-13T03:29:19 INFO auth-svc handled 47 reqs
+2026-09-20T00:34:15 INFO api-gateway handled 39 reqs
+2026-09-27T04:16:38 INFO search-svc handled 73 reqs
+2026-01-16T07:17:55 INFO auth-svc handled 42 reqs
+2026-03-24T15:05:14 INFO auth-svc handled 2 reqs
+2026-04-23T14:23:27 WARN api-gateway slow query 541ms
+2026-06-17T21:35:57 ERROR 104 billing-svc request failed: timeout
+2026-02-18T02:52:20 ERROR 343 api-gateway request failed: 5xx
+2026-09-19T17:48:13 INFO api-gateway handled 40 reqs
+2026-09-20T00:32:37 WARN api-gateway slow query 471ms
+2026-09-28T11:41:57 ERROR 243 search-svc request failed: timeout
+2026-02-21T16:01:07 ERROR 201 api-gateway request failed: db down
+2026-06-20T22:40:20 INFO auth-svc handled 25 reqs
+2026-09-14T01:26:13 WARN billing-svc slow query 902ms
+2026-06-16T10:30:25 INFO api-gateway handled 91 reqs
+2026-05-28T01:51:29 ERROR 104 search-svc request failed: timeout
 2026-02-15T20:44:37 ERROR 357 queue-worker request failed: timeout
 2026-04-10T14:33:05 ERROR 243 auth-svc request failed: db down
 2026-02-20T21:31:38 WARN billing-svc slow query 732ms
@@ -368,35 +398,5 @@
 2026-05-22T14:24:01 ERROR 357 auth-svc request failed: throttled
 2026-09-15T05:08:48 WARN auth-svc slow query 628ms
 2026-02-16T20:56:08 INFO api-gateway handled 26 reqs
-2026-03-12T04:01:14 WARN api-gateway slow query 861ms
-2026-03-15T01:25:19 INFO billing-svc handled 20 reqs
-2026-02-12T13:21:09 WARN api-gateway slow query 79ms
-2026-05-16T01:13:20 ERROR 243 auth-svc request failed: timeout
-2026-06-21T00:06:35 INFO search-svc handled 48 reqs
-2026-07-11T16:37:41 INFO auth-svc handled 7 reqs
-2026-05-10T13:15:54 WARN search-svc slow query 167ms
-2026-07-11T17:35:17 INFO auth-svc handled 10 reqs
-2026-06-10T00:10:58 ERROR 243 auth-svc request failed: 5xx
-2026-08-21T17:37:52 INFO auth-svc handled 79 reqs
-2026-09-15T16:32:07 ERROR 535 auth-svc request failed: timeout
-2026-08-28T13:47:04 ERROR 303 api-gateway request failed: throttled
-2026-08-24T22:29:19 INFO billing-svc handled 41 reqs
-2026-02-21T15:49:50 INFO search-svc handled 72 reqs
-2026-09-21T18:56:55 ERROR 357 queue-worker request failed: 5xx
-2026-01-26T07:23:50 ERROR 512 search-svc request failed: throttled
-2026-08-25T07:12:09 INFO auth-svc handled 52 reqs
-2026-07-23T10:27:29 INFO api-gateway handled 86 reqs
-2026-07-26T04:48:46 INFO auth-svc handled 42 reqs
-2026-07-12T23:26:41 WARN search-svc slow query 361ms
-2026-04-27T07:15:18 INFO search-svc handled 96 reqs
-2026-05-12T06:11:16 ERROR 303 billing-svc request failed: db down
-2026-06-23T19:58:16 INFO api-gateway handled 64 reqs
-2026-01-15T16:24:26 WARN search-svc slow query 454ms
-2026-03-11T20:01:19 ERROR 167 billing-svc request failed: 5xx
-2026-05-14T03:15:49 ERROR 350 queue-worker request failed: db down
-2026-05-17T23:22:14 ERROR 494 auth-svc request failed: throttled
-2026-06-25T05:24:48 INFO api-gateway handled 85 reqs
-2026-08-28T21:38:58 INFO auth-svc handled 24 reqs
-2026-09-24T22:05:07 ERROR 227 api-gateway request failed: throttled
 2026-09-04T00:00:00 weird line mentioning code 503 without prefix
 corrupted log line without timestamp

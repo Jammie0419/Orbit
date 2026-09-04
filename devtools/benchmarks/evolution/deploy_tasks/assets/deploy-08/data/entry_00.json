@@ -1,12 +1,12 @@
 {
  "id": 0,
  "meta": {
-  "name": "charger",
-  "region": "Shanghai"
+  "name": "monitor",
+  "region": "Sydney"
  },
  "values": {
   "amount": 0,
-  "tax": 6.62,
-  "shipping": 15.5
+  "tax": 1.45,
+  "shipping": 5
  }
 }

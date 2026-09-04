@@ -1,12 +1,12 @@
 {
  "id": 11,
  "meta": {
-  "name": "cable",
-  "region": "Seoul"
+  "name": "dock",
+  "region": "Singapore"
  },
  "values": {
-  "amount": 99.99,
-  "tax": 1.19,
-  "shipping": 0
+  "amount": 17,
+  "tax": 3.8,
+  "shipping": null
  }
 }

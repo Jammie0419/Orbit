@@ -1,12 +1,12 @@
 {
  "id": 2,
  "meta": {
-  "name": "hub",
-  "region": "Shanghai"
+  "name": "speaker",
+  "region": "Shenzhen"
  },
  "values": {
   "amount": 0,
-  "tax": 3.11,
-  "shipping": 0
+  "tax": 4.0,
+  "shipping": 15.5
  }
 }

@@ -1,12 +1,12 @@
 {
  "id": 3,
  "meta": {
-  "name": "dock",
-  "region": "London"
+  "name": "speaker",
+  "region": "Singapore"
  },
  "values": {
-  "amount": 17,
-  "tax": 1.02,
-  "shipping": 15.5
+  "amount": -3,
+  "tax": 2.7,
+  "shipping": 0
  }
 }
