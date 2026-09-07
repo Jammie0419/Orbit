@@ -58,6 +58,134 @@ def git_log_files(clone: pathlib.Path, sha_start: str) -> list[str]:
     return list(dict.fromkeys(files))  # 去重保序
 
 
+def _load_jsonl(p: pathlib.Path) -> list[dict]:
+    if not p.is_file():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8-sig").splitlines() if l.strip()]
+
+
+def _cycle_outcome(r: dict) -> str | None:
+    tx = r.get("transaction")
+    if isinstance(tx, str):
+        try:
+            tx = json.loads(tx)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return tx.get("cycle_outcome") if isinstance(tx, dict) else None
+
+
+def _deep_metrics(data_root: pathlib.Path) -> dict:
+    """原始观测文件的深度指标：模型调用口径、战役执行失败模式、评审闸门、
+    信用分配、路由分支、经验复杂度/错误步率、技能生成失败原因。
+    这些是论文机制证据与排障的核心，session_ledger 不覆盖。"""
+    st = data_root / "state"
+    out: dict = {}
+    # 1. 模型调用口径
+    ua = _load_jsonl(st / "usage_attempts.jsonl")
+    if ua:
+        out["model_usage"] = {
+            "total_calls": len(ua),
+            "by_category": dict(Counter(r.get("category") for r in ua)),
+            "by_model": dict(Counter(r.get("model") for r in ua)),
+            "pricing_known": dict(Counter(str(r.get("pricing_known")) for r in ua)),
+            "context_bytes": sum(int(r.get("candidate_context_size_bytes") or 0) for r in ua),
+        }
+    # 2. 战役执行失败模式
+    cps = _load_jsonl(st / "evolution_checkpoints.jsonl")
+    camp = []
+    for r in cps:
+        ax = r.get("outcome_axes", {}) or {}
+        exe = ax.get("execution", {}) or {}
+        fails = exe.get("failure") or {}
+        tools = [f.get("tool") for f in (fails.get("tool_errors") or [])]
+        tx = r.get("transaction")
+        if isinstance(tx, str):
+            try:
+                tx = json.loads(tx)
+            except (json.JSONDecodeError, TypeError):
+                tx = {}
+        camp.append({
+            "task_id": r.get("task_id"),
+            "exec": exe.get("status"),
+            "failure_kind": fails.get("kind"),
+            "tool_errors": tools,
+            "recoveries": len(exe.get("recoveries") or []),
+            "rounds": r.get("rounds"),
+            "cycle_outcome": (tx.get("cycle_outcome") if isinstance(tx, dict) else None),
+        })
+    out["campaign_exec"] = camp
+    out["campaign_degraded_rate"] = (round(sum(1 for c in camp if c["exec"] == "degraded") / len(camp), 3)
+                                     if camp else None)
+    # 3. 评审闸门（解释 no_op 的根因）
+    arp = st / "advisory_review.json"
+    if arp.is_file():
+        ar = json.loads(arp.read_text(encoding="utf-8"))
+        runs = ar.get("advisory_runs") or []
+        out["advisory"] = {
+            "runs": len(runs) if isinstance(runs, list) else 0,
+            "status_dist": dict(Counter(r.get("status") for r in runs)) if isinstance(runs, list) else None,
+            "commit_readiness_debts": len(ar.get("commit_readiness_debts") or []),
+            "open_obligations": len(ar.get("open_obligations") or []),
+        }
+    # 4. 技能生成失败原因
+    sg = _load_jsonl(st / "skill_generation_history.jsonl")
+    out["skill_gen"] = {
+        "total": len(sg),
+        "created": sum(1 for r in sg if r.get("outcome") == "created"),
+        "failed": [{"task_id": r.get("task_id"), "reason": r.get("reason")}
+                   for r in sg if r.get("outcome") != "created"],
+    }
+    # 5. 信用分配
+    sc = _load_jsonl(st / "step_credits.jsonl")
+    creds = [float(r.get("credit") or 0) for r in sc]
+    out["credits"] = {
+        "total": len(sc),
+        "role_dist": dict(Counter(r.get("role") for r in sc)),
+        "positive": sum(1 for c in creds if c > 0),
+        "negative": sum(1 for c in creds if c < 0),
+        "sum": round(sum(creds), 3),
+    }
+    # 6. 路由分支覆盖
+    rh = _load_jsonl(st / "routing_history.jsonl")
+    out["routing"] = {
+        "branch_dist": dict(Counter(r.get("branch") for r in rh)),
+        "skills_count_dist": dict(Counter(r.get("skills_count") for r in rh)),
+        "tools_count_dist": dict(Counter(r.get("tools_count") for r in rh)),
+    }
+    # 7. 经验复杂度 / 错误步率
+    ee = _load_jsonl(st / "evolution_experiences.jsonl")
+    compl, otype = Counter(), Counter()
+    esteps = eerr = 0
+    for r in ee:
+        ov = r.get("overall")
+        if isinstance(ov, str):
+            try:
+                ov = json.loads(ov)
+            except (json.JSONDecodeError, TypeError):
+                ov = {}
+        ov = ov if isinstance(ov, dict) else {}
+        compl[ov.get("objective_complexity")] += 1
+        otype[ov.get("objective_type")] += 1
+        stp = r.get("steps")
+        if isinstance(stp, str):
+            try:
+                stp = json.loads(stp)
+            except (json.JSONDecodeError, TypeError):
+                stp = []
+        if isinstance(stp, list):
+            esteps += len(stp)
+            eerr += sum(1 for s in stp if s.get("is_error"))
+    out["experiences"] = {
+        "total": len(ee),
+        "complexity": dict(compl),
+        "objective_type": dict(otype),
+        "steps_total": esteps,
+        "error_steps": eerr,
+        "error_rate": round(eerr / esteps, 3) if esteps else None,
+    }
+    return out
+
+
 def summarize_session(session_dir: pathlib.Path) -> dict:
     ledger_path = session_dir / "session_ledger.json"
     data_root = session_dir / "data"
@@ -76,6 +204,19 @@ def summarize_session(session_dir: pathlib.Path) -> dict:
         "total_cost_usd": ledger.get("total_cost_usd", 0),
         "absorbed_commit_shas": ledger.get("absorbed_commit_shas", []),
     }
+    # ledger 未最终化时回退读原始文件（evolution_campaign.json + checkpoints）
+    if not sum_["campaign"]["cycle_counts"] and not sum_["campaign"]["absorbed_count"]:
+        ecp = data_root / "state" / "evolution_campaign.json"
+        if ecp.is_file():
+            ec = json.loads(ecp.read_text(encoding="utf-8"))
+            cps = _load_jsonl(data_root / "state" / "evolution_checkpoints.jsonl")
+            cc = Counter(_cycle_outcome(r) for r in cps)
+            sum_["campaign"]["cycle_counts"] = dict(cc)
+            sum_["campaign"]["absorbed_count"] = int(ec.get("absorbed_cycles_done") or 0) + (cc.get("absorbed") or 0)
+            sum_["campaign"]["cycles_done"] = int(ec.get("cycles_done") or 0) or len(cps)
+            sum_["campaign"]["no_op_count"] = cc.get("no_op") or 0
+            sum_["campaign"]["abandoned_count"] = cc.get("abandoned") or 0
+            sum_["campaign"]["total_cost_usd"] = ec.get("budget_spent_usd", 0)
     absorbed = sum_["campaign"]["absorbed_count"]
     cost = sum_["campaign"]["total_cost_usd"] or 0
     sum_["campaign"]["cost_per_absorbed"] = round(cost / absorbed, 4) if absorbed else None
@@ -144,6 +285,7 @@ def summarize_session(session_dir: pathlib.Path) -> dict:
     sum_["observables"] = {name: {"exists": p.exists(),
                                   "lines": sum(1 for _ in p.open(encoding="utf-8")) if p.exists() else 0}
                            for name, p in obs.items()}
+    sum_["deep"] = _deep_metrics(data_root)
     return sum_
 
 
@@ -191,6 +333,37 @@ def render(sessions: list[dict]) -> str:
         obs = s["observables"]
         A("- 观测文件: " + ", ".join(f"{n}={'✓' if o['exists'] else '✗'}({o['lines']}行)"
                                      for n, o in obs.items()))
+        d = s.get("deep") or {}
+        if d.get("model_usage"):
+            mu = d["model_usage"]
+            mb = mu["context_bytes"]
+            A(f"- 模型调用: {mu['total_calls']} 次（category={mu['by_category']}；"
+              f"pricing_known={mu['pricing_known']} → 系统计成本为 0，真实成本≈调用数×单价）；"
+              f"context 累计 {mb/1024/1024:.1f} MB")
+        if d.get("campaign_exec"):
+            ce = d["campaign_exec"]
+            A(f"- 战役执行: {len(ce)} 战，degraded 率={d.get('campaign_degraded_rate')}；"
+              + "; ".join(f"{c['task_id']}:{c['exec']}"
+                          + (f"(tools={','.join(c['tool_errors'])})" if c['tool_errors'] else "")
+                          + f"→{c['cycle_outcome']}" for c in ce))
+        if d.get("advisory"):
+            ad = d["advisory"]
+            A(f"- 评审闸门: runs={ad['runs']} status={ad['status_dist']} "
+              f"commit_readiness_debts={ad['commit_readiness_debts']} open_obligations={ad['open_obligations']}")
+        if d.get("skill_gen"):
+            sg = d["skill_gen"]
+            A(f"- 技能生成: {sg['created']}/{sg['total']} created；"
+              + ("失败: " + ", ".join(f"{f['task_id']}({f['reason']})" for f in sg['failed']) if sg['failed'] else "无失败"))
+        if d.get("credits"):
+            cr = d["credits"]
+            A(f"- 信用分配: {cr['total']} 条 role={cr['role_dist']} 正{cr['positive']}/负{cr['negative']} 和={cr['sum']}")
+        if d.get("routing"):
+            rt = d["routing"]
+            A(f"- 路由: branch={rt['branch_dist']} skills_count={rt['skills_count_dist']} tools_count={rt['tools_count_dist']}")
+        if d.get("experiences"):
+            ex = d["experiences"]
+            A(f"- 经验: {ex['total']} 条 complexity={ex['complexity']} type={ex['objective_type']} "
+              f"步{'-'.join(map(str,[ex['steps_total'],ex['error_steps']]))} 错误步率={ex['error_rate']}")
         A("")
     if len(sessions) == 2:
         a, b = sessions
