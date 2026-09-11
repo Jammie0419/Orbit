@@ -769,7 +769,10 @@ def get_tools() -> List[ToolEntry]:
                 "diagnostics (a mid-write disk error is the one case that can leave "
                 "earlier files applied, and it says so) — read the file(s) "
                 "first and state counts you verified. This is the safe 'replace all': "
-                "use count>1 for identical repeated edits instead of many edit_text calls."
+                "use count>1 for identical repeated edits instead of many edit_text calls. "
+                "⚠️ CRITICAL: 'edits' MUST be a native JSON array, NOT a stringified array! "
+                "Correct: edits: [{\"path\": \"file.py\", \"old_str\": \"foo\", \"new_str\": \"bar\"}] "
+                "Wrong: edits: \"[{\\\"path\\\": ...}]\" (this is a string, will fail)"
             ),
             "parameters": {"type": "object", "properties": {
                 "edits": {"type": "array", "items": {"type": "object", "properties": {

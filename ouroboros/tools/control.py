@@ -2758,7 +2758,8 @@ def get_tools() -> List[ToolEntry]:
                            "timestamped block; oldest blocks are auto-evicted when the cap (10) is reached. "
                            "Write what matters NOW — active tasks, decisions, observations. "
                            "Persists across sessions, read at every task start. "
-                           "No-op on a project-scoped task (no per-project scratchpad); use knowledge_write for project facts.",
+                           "No-op on a project-scoped task (no per-project scratchpad); use knowledge_write for project facts. "
+                           "⚠️ PARAM NAME: Use 'content' (string, NOT 'blocks' array).",
             "parameters": {"type": "object", "properties": {
                 "content": {"type": "string", "description": "Content for this scratchpad block"},
             }, "required": ["content"]},

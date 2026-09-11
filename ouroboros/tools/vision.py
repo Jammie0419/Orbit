@@ -732,7 +732,8 @@ def get_tools() -> List[ToolEntry]:
                     "Use for: analyzing charts, reading diagrams, understanding screenshots, checking UI. "
                     "NOTE: this DELEGATES to a separate vision model — when you are vision-capable "
                     "yourself, prefer view_image (native inline vision, no second-model handoff) for "
-                    "anything you need to REASON about rather than merely describe."
+                    "anything you need to REASON about rather than merely describe. "
+                    "⚠️ REQUIRED: 'prompt' parameter is required, cannot pass empty {}."
                 ),
                 "parameters": {
                     "type": "object",

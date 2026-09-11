@@ -82,6 +82,13 @@ PERSISTENT_OBJECTIVE = (
     "本任务运行在无项目作用域的实验环境：不要调用 journal_write/journal_read/"
     "workpad_read 等需要 project scope 的工具；里程碑记录改用 knowledge_write "
     "或 scratchpad_write。）"
+    "\n\n⚠️ 明确执行步骤（必须严格遵循）："
+    "\n1. 探索阶段（最多 10 次工具调用）：用 search_code/query_code/read_file 理解代码结构"
+    "\n2. 实施阶段：用 edit_text/edit_batch/write_file 修改代码——探索后必须立即进入实施"
+    "\n3. 测试阶段：用 run_command 运行相关测试验证修改"
+    "\n4. 提交阶段：调用 commit_reviewed 提交代码——这是必须的最后一步"
+    "\n5. 完成：调用 request_restart 重启"
+    "\n注意：探索阶段不超过 10 次工具调用，之后必须开始修改代码。不要无限探索！"
 )
 
 # spec §10.2 — evolution-layer switches; both are implemented and opt-in
@@ -308,7 +315,7 @@ def _seed_settings(data_root: pathlib.Path, arm: str, cadence: str, total_budget
         except (OSError, ValueError):
             live_cfg = {}
     overrides = {
-        "OUROBOROS_RUNTIME_MODE": "advanced",
+        "OUROBOROS_RUNTIME_MODE": "pro",
         "OUROBOROS_POST_TASK_EVOLUTION": "true",
         "OUROBOROS_POST_TASK_EVOLUTION_CADENCE": cadence,
         "OUROBOROS_EVOLUTION_PERSISTENT_OBJECTIVE": PERSISTENT_OBJECTIVE,
@@ -792,7 +799,7 @@ def main() -> int:
     # *ARM* switches）读的是环境变量而非 settings 文件 —— 不注入则 maybe_promote
     # 在第一道门就短路，promote 决策与技能进化块整场不执行。外部显式环境变量优先。
     os.environ.setdefault("OUROBOROS_POST_TASK_EVOLUTION", "true")
-    os.environ.setdefault("OUROBOROS_RUNTIME_MODE", "advanced")
+    os.environ.setdefault("OUROBOROS_RUNTIME_MODE", "pro")
     for _env_key, _env_val in ARM_SWITCHES.get(args.arm.upper(), {}).items():
         os.environ.setdefault(_env_key, _env_val)
     # 旁模型一致性：ouroboros 的模型 getter 只读环境变量（缺失回退默认 grok-4.5），

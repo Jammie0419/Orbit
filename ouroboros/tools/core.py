@@ -2043,7 +2043,8 @@ def get_tools() -> List[ToolEntry]:
                 "Use max_lines (default 2000) and start_line (default 1) to read large files in chunks. "
                 "The result header shows root:path and 'lines X\u2013Y of Z' so you know where and how much you read. "
                 "Prefer this over cat/head/sed-as-reader in run_command; to locate code first use query_code "
-                "(symbols/definitions/callers) or search_code (text/regex), then read_file the hit."
+                "(symbols/definitions/callers) or search_code (text/regex), then read_file the hit. "
+                "⚠️ PARAM NAME: Use 'start_line' (integer, NOT 'offset' string)."
             ),
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},
@@ -2111,7 +2112,8 @@ def get_tools() -> List[ToolEntry]:
                 "Default root=active_workspace. Result messages show root:path. "
                 "For several edits at once, repeated identical replacements, or "
                 "counted replace-all, prefer edit_batch (one atomic call). "
-                "Set bucket/skill_name ONLY for root=skill_payload (skill authoring); leave empty for normal edits."
+                "Set bucket/skill_name ONLY for root=skill_payload (skill authoring); leave empty for normal edits. "
+                "⚠️ PARAM NAMES: Use 'old_str' and 'new_str' (NOT 'old_text'/'new_text')."
             ),
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},

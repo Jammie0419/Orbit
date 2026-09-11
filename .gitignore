@@ -115,6 +115,7 @@ MagicMock/
 # make_fixtures_v2.py; committing them would pin a snapshot the benchmark
 # deliberately does not measure, and leaving them untracked dirties the seed gate.
 devtools/benchmarks/editbench
+docs/orbit/figures
 
 # Benchmark run artifacts (GAIA/TB runs, evolution corpus) never enter the tree.
 /bench_runs/

@@ -1500,7 +1500,8 @@ def get_tools() -> List[ToolEntry]:
                 "string. Use cwd= for working directory; cd is rejected. "
                 "For pipes/chaining use [\"sh\", \"-c\", \"cmd1 && cmd2\"]. "
                 "Prefer the dedicated tools where one fits: read_file (not cat/head/sed-as-reader), "
-                "search_code/query_code (not grep/find-as-search), write_file/edit_text (not sed/echo-redirect)."
+                "search_code/query_code (not grep/find-as-search), write_file/edit_text (not sed/echo-redirect). "
+                "⚠️ PARAM NAME: Use 'cmd' (NOT 'command'). Must be an array: cmd: [\"ls\", \"-la\"]"
             ),
             "parameters": {"type": "object", "properties": {
                 "cmd": {
@@ -1554,7 +1555,8 @@ def get_tools() -> List[ToolEntry]:
             "description": (
                 "Run a short task-scoped temporary script with a declared interpreter. "
                 "Use for multi-line diagnostics or harness helpers; generated script files live under the task drive. "
-                "The underlying command result echoes the resolved cwd."
+                "The underlying command result echoes the resolved cwd. "
+                "⚠️ PARAM NAME: Use 'script' (NOT 'command')."
             ),
             "parameters": {"type": "object", "properties": {
                 "script": {"type": "string"},
