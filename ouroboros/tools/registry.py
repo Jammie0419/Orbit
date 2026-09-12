@@ -1494,6 +1494,33 @@ class ToolEntry:
     mutates_worktree: bool = False
 
 
+def _shell_gate_audit(ctx: Any, raw_cmd: Any, *, block: str = "", switch: bool | None = None) -> None:
+    """Experiment audit (OUROBOROS_SHELL_GATE_DEBUG=1): one line per shell-gate
+    evaluation — task_type/task_id/cmd/switch/block — into
+    <drive>/logs/shell_gate_debug.jsonl. Diagnoses why a fence did or did not
+    fire on a live campaign (round-10/11 follow-up)."""
+    import os as _os
+    if not _os.environ.get("OUROBOROS_SHELL_GATE_DEBUG"):
+        return
+    try:
+        import json as _json
+        import datetime as _dt
+        entry = {"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                 "task_type": str(getattr(ctx, "current_task_type", "")),
+                 "task_id": str(getattr(ctx, "task_id", "")),
+                 "cmd": str(raw_cmd)[:140]}
+        if switch is not None:
+            entry["switch"] = bool(switch)
+            entry["block"] = bool(block)
+        drive = getattr(ctx, "drive_root", None)
+        p = pathlib.Path(str(drive or ".")) / "logs" / "shell_gate_debug.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 class ToolRegistry:
     """Tool registry; modules export ``get_tools()``."""
 
@@ -2713,12 +2740,16 @@ class ToolRegistry:
         # Evolution campaigns must commit through commit_reviewed (the receipt is
         # what restart/absorb verify) — a direct shell commit bypasses the review
         # chain, leaves no receipt, and the cycle no_ops (round-10 smoke case).
-        if (str(getattr(self._ctx, "current_task_type", "") or "") == "evolution"):
+        _gate_task_type = str(getattr(self._ctx, "current_task_type", "") or "")
+        if _gate_task_type == "evolution":
             from ouroboros.config import get_evolution_block_shell_commit
             from ouroboros.git_shell_policy import evolution_shell_commit_block_reason
-            if get_evolution_block_shell_commit():
-                if block := evolution_shell_commit_block_reason(raw_cmd):
-                    return block
+            _switch = get_evolution_block_shell_commit()
+            _block = evolution_shell_commit_block_reason(raw_cmd) if _switch else ""
+            _shell_gate_audit(self._ctx, raw_cmd, block=_block, switch=_switch)
+            if _block:
+                return _block
+        _shell_gate_audit(self._ctx, raw_cmd)
         if workspace_mode and not acting_self_worktree:
             work_dir = self._resolved_shell_cwd(args, binding)
             if isinstance(work_dir, str):  # a cwd block message, not a path
