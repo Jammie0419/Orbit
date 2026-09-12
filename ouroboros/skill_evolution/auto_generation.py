@@ -146,6 +146,7 @@ def render_skill_manifest(skill: Dict[str, Any]) -> str:
         "description": str(skill.get("description") or ""),
         "version": str(skill.get("version") or "1.0"),
         "type": str(skill.get("type") or "script"),
+        "runtime": str(skill.get("runtime") or "python"),
         "when_to_use": str(skill.get("when_to_use") or ""),
         "timeout_sec": int(skill.get("timeout_sec") or 60),
         "scripts": [str(s["name"]) for s in (skill.get("scripts") or [])],

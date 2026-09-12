@@ -84,8 +84,8 @@ wc -l bench_runs/evolution/V0/data/memory/knowledge/improvement-backlog.md
 - `checkout -B ouroboros` 已由驱动完成；`safe_restart` 依赖该分支存在。
 - **单条记录失败不会中断整轮**：驱动逐条 try/except，失败计入
   `feed_progress.json` 的 `failures` 与 ledger 的 `records_failed`（续跑时跳过失败记录）。
-- **V2 / V3 目前跑不通**：进化层开关（多智能体/技能进化）对应代码尚未实现
-  （§2.4），`--arm V2/V3` 会注入 settings 里不生效的键。当前可端到端运行的是 V0。
+- **V2 / V3 进化层已实现并实测**（多智能体战役 / 技能进化，开关由 arm 注入）。
+  注意：mimo 级模型的战役 agent 常见失败模式见 `EVOLUTION_SMOKE_ANALYSIS.md`。
 - `server.stop()` 只在全部语料喂完且战役结束后调用（驱动已处理）。
 - 会话目录是持久的（供溯源）：重跑请清理目录或换 `--session-dir`；
   断点续跑用 `--resume`（进度文件 `feed_progress.json`）。
@@ -113,3 +113,42 @@ nohup python -m devtools.benchmarks.evolution.run_evolution_arm \
 # 4. 断线恢复
 python -m devtools.benchmarks.evolution.run_evolution_arm --session-dir bench_runs/evolution/V0 --resume
 ```
+## 技能部署（run_skill_deploy.py，与 arm 解耦）
+
+arm 跑完语料后的收尾流程：`wait_for_absorb`（等在途战役，最长 30 分钟）→ 打
+`<arm>-evolved` 标签 → 写 `session_ledger.json` → 退出。**默认不跑部署窗口**；
+要顺带部署需显式加 `--deploy`（V2/V3）。技能部署的正常入口是独立脚本：
+
+```bash
+# 前测：修 frontmatter + 重背书 + 跑固定任务集（建议先挑 2 个技能，约 1 小时/技能）
+python devtools/benchmarks/evolution/run_skill_deploy.py \
+    --session-dir /home/lzm/bench_runs/arms/smoke_test_10 \
+    --skills clinical-trial-enrollment-finder,openreview-neurips-query --re-attest
+
+# 后测：GEPA 变异（管线 nudge 触发，evolution_version 提升）后重跑同一任务集出 Δ
+python devtools/benchmarks/evolution/run_skill_deploy.py \
+    --session-dir <session> --skills <同前> --phase post
+```
+
+流程：`--fix-frontmatter`（自动补 `runtime:` 字段，默认 python3）→ `--re-attest`
+（重背书，刷新内容哈希绑定，解除 edited-since-review 拦截）→ 启动隔离 server
+（cadence=off，部署会话零战役干扰）→ 每技能 × 15 条固定任务（`deploy_tasks.json`，
+与 GAIA/TB 零重叠）→ 写 `deploy_log.jsonl` 与 `skill_stats.json`。
+
+产出：`skill_stats.json`（执行数/成功率/版本）+ `deploy_log.jsonl`（前后测分布）
++ 部署状态机 `deploy_state.json`（none → baseline → post）。
+
+### 部署任务集（2026-09-12 修订）
+
+每技能 13 条运行，三类口径（deploy_log 的 kind 字段区分；其中 edge+domain=10 条强制执行技能，正好满足 GEPA 变异门槛 >=10 executions）：
+
+- **edge ×3**（技能强制）：空输入/超长/非法编码，测技能自身鲁棒性；
+- **domain ×7**（技能强制）：按技能 SKILL.md 由 LLM 生成的领域任务
+  （`run_skill_deploy.py --gen-domain-tasks`，存 `<skill>/deploy_tasks.json`）——
+  测技能真实价值，是 GEPA 前后测 Δ 的主口径；
+- **regression ×3**（中性措辞，不强制用技能）：通用任务回归，测技能不拖累基线。
+
+已修复的历史问题：① 通用任务原措辞强制"使用技能 <name>"，领域技能做不了
+CSV 清洗类任务、agent 改用普通工具后成功却被归因到技能（归因噪声）——已改
+中性措辞；② 生成端 `render_skill_manifest` 漏渲染 `runtime` 字段导致全部技能
+exec 被拦——已补（存量技能由 `--fix-frontmatter` 补齐）。

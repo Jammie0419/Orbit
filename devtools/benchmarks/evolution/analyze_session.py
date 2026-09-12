@@ -21,6 +21,7 @@ import json
 import pathlib
 import subprocess
 from collections import Counter, defaultdict
+from typing import Any
 
 # 落点分类规则：吸收提交涉及的文件路径 → 类别（通用层组分）
 _COMMON_PATTERNS = [
@@ -56,6 +57,185 @@ def git_log_files(clone: pathlib.Path, sha_start: str) -> list[str]:
         if line and "/" in line:
             files.append(line)
     return list(dict.fromkeys(files))  # 去重保序
+
+
+def git_show_numstat(clone: pathlib.Path, sha: str) -> dict | None:
+    """单个提交的 diff 统计（文件数 / +行 / -行）。评审分支上未吸收的提交同样可达。"""
+    p = subprocess.run(["git", "show", "--numstat", "--format=", "--no-renames", sha],
+                       cwd=str(clone), capture_output=True, text=True, timeout=60)
+    if p.returncode != 0:
+        return None
+    files = ins = dels = 0
+    paths = []
+    for line in (p.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[2].strip():
+            add, rem, path = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            if add != "-":
+                ins += int(add)
+            if rem != "-":
+                dels += int(rem)
+            files += 1
+            paths.append(path)
+    if not files:
+        return None
+    return {"files": files, "insertions": ins, "deletions": dels, "paths": paths[:20]}
+
+
+def _str_lines(v: Any) -> int:
+    v = str(v or "")
+    return (v.count("\n") + 1) if v else 0
+
+
+def _edit_churn(tools_rows: list[dict]) -> dict:
+    """战役侧调用级代码改动量：8 位 hex task_id 视为战役/子代理任务，
+    从 edit 工具的 args 聚合 ±行数（无需 commit，未提交周期也能统计）。"""
+    import re
+    hex8 = re.compile(r"^[0-9a-f]{8}$")
+    calls = ok = arg_errors = 0
+    ins = dels = 0
+    files: Counter = Counter()
+    by_tool: Counter = Counter()
+    for r in tools_rows:
+        if r.get("type") != "tool_call" or not hex8.match(str(r.get("task_id") or "")):
+            continue
+        tool = str(r.get("tool") or "")
+        if tool not in ("edit_text", "edit_batch", "write_file"):
+            continue
+        calls += 1
+        by_tool[tool] += 1
+        preview = str(r.get("result_preview") or "")
+        if "TOOL_ARG_ERROR" in preview or "CORE_PROTECTION_BLOCKED" in preview:
+            arg_errors += 1
+            continue
+        ok += 1
+        args = r.get("args") or {}
+        edits = []
+        if tool == "edit_text":
+            edits = [{"path": args.get("path"), "old_str": args.get("old_str"),
+                      "new_str": args.get("new_str")}]
+        elif tool == "edit_batch":
+            batch = args.get("edits") or []
+            if isinstance(batch, str):
+                try:
+                    batch = json.loads(batch)
+                except json.JSONDecodeError:
+                    batch = []
+            edits = batch if isinstance(batch, list) else []
+        else:  # write_file
+            edits = [{"path": args.get("path"), "old_str": None,
+                      "new_str": args.get("content")}]
+        for e in edits:
+            if not isinstance(e, dict):
+                continue
+            path = str(e.get("path") or "")
+            if path:
+                files[path] += 1
+            old, new = e.get("old_str"), e.get("new_str")
+            if old:
+                dels += _str_lines(old)
+            if new:
+                ins += _str_lines(new)
+    return {"edit_calls": calls, "ok": ok, "arg_or_gate_errors": arg_errors,
+            "unique_files": len(files), "insertions": ins, "deletions": dels,
+            "by_tool": dict(by_tool),
+            "top_files": dict(files.most_common(10))}
+
+
+def _review_branch_diffs(clone: pathlib.Path, sha_start: str) -> dict:
+    """未吸收的评审分支提交（如 evolution-leftover-*）的 diff 统计。
+    no_op 周期的代码产出不进 HEAD，HEAD 口径看不到；这里按分支补齐
+    "战役真实代码产出"。已并入 HEAD 的分支跳过（吸收提交另有 HEAD 统计）。"""
+    empty = {"branches": [], "commits": 0, "files": 0, "insertions": 0, "deletions": 0, "per_commit": []}
+    if not sha_start or not (clone / ".git").is_dir():
+        return empty
+    br = subprocess.run(["git", "branch", "--format=%(refname:short)"], cwd=str(clone),
+                        capture_output=True, text=True, timeout=30)
+    if br.returncode != 0:
+        return empty
+    seen_shas: set[str] = set()
+    per_commit: list[dict] = []
+    for b in (br.stdout or "").splitlines():
+        b = b.strip()
+        if not b:
+            continue
+        anc = subprocess.run(["git", "merge-base", "--is-ancestor", b, "HEAD"], cwd=str(clone),
+                             capture_output=True)
+        if anc.returncode == 0:
+            continue  # 已并入当前分支
+        lo = subprocess.run(["git", "log", "--numstat", "--no-renames", "--format=@%H",
+                             f"{sha_start}..{b}"], cwd=str(clone),
+                            capture_output=True, text=True, timeout=60)
+        cur = None
+        for line in (lo.stdout or "").splitlines():
+            if line.startswith("@"):
+                sha = line[1:].strip()
+                if sha in seen_shas:
+                    cur = None
+                    continue
+                seen_shas.add(sha)
+                cur = {"sha": sha[:12], "branch": b, "files": 0,
+                       "insertions": 0, "deletions": 0, "paths": []}
+                per_commit.append(cur)
+            elif cur is not None:
+                parts = line.split("\t")
+                if len(parts) >= 3 and parts[2].strip():
+                    if parts[0].strip() != "-":
+                        cur["insertions"] += int(parts[0])
+                    if parts[1].strip() != "-":
+                        cur["deletions"] += int(parts[1])
+                    cur["files"] += 1
+                    cur["paths"].append(parts[2])
+    return {"branches": sorted({c["branch"] for c in per_commit}),
+            "commits": len(per_commit),
+            "files": sum(c["files"] for c in per_commit),
+            "insertions": sum(c["insertions"] for c in per_commit),
+            "deletions": sum(c["deletions"] for c in per_commit),
+            "per_commit": per_commit}
+
+
+def _diff_metrics(session_dir: pathlib.Path, data_root: pathlib.Path) -> dict:
+    """代码改动量统计：周期级（checkpoints 的 commit_sha → git numstat）
+    + 评审分支级（未吸收提交）+ 战役侧调用级（tools.jsonl 的 edit args 聚合）。"""
+    clone = session_dir / "clone"
+    st = data_root / "state"
+    sha_start = ""
+    progress_path = session_dir / "feed_progress.json"
+    if progress_path.is_file():
+        try:
+            sha_start = str((json.loads(progress_path.read_text(encoding="utf-8")) or {}).get("sha_start") or "")
+        except (json.JSONDecodeError, OSError):
+            sha_start = ""
+    per_cycle = []
+    for r in _load_jsonl(st / "evolution_checkpoints.jsonl"):
+        tx = r.get("transaction")
+        if isinstance(tx, str):
+            try:
+                tx = json.loads(tx)
+            except (json.JSONDecodeError, TypeError):
+                tx = {}
+        tx = tx if isinstance(tx, dict) else {}
+        sha = str(tx.get("commit_sha") or "").strip()
+        stat = git_show_numstat(clone, sha) if sha and (clone / ".git").is_dir() else None
+        per_cycle.append({
+            "task_id": r.get("task_id"),
+            "cycle_outcome": tx.get("cycle_outcome"),
+            "commit_sha": (sha[:12] or None),
+            "files": stat["files"] if stat else None,
+            "insertions": stat["insertions"] if stat else None,
+            "deletions": stat["deletions"] if stat else None,
+            "paths": (stat or {}).get("paths"),
+        })
+    committed = [c for c in per_cycle if c["files"] is not None]
+    totals = {
+        "committed_cycles": len(committed),
+        "files": sum(c["files"] or 0 for c in committed),
+        "insertions": sum(c["insertions"] or 0 for c in committed),
+        "deletions": sum(c["deletions"] or 0 for c in committed),
+    }
+    review = _review_branch_diffs(clone, sha_start)
+    churn = _edit_churn(_load_jsonl(data_root / "logs" / "tools.jsonl"))
+    return {"per_cycle": per_cycle, "totals": totals, "review_branch": review, "edit_churn": churn}
 
 
 def _load_jsonl(p: pathlib.Path) -> list[dict]:
@@ -192,9 +372,12 @@ def summarize_session(session_dir: pathlib.Path) -> dict:
     sum_ = {"session": str(session_dir), "error": None, "campaign": {}, "files": {},
             "skills": {}, "deploy": {}, "observables": {}}
     if not ledger_path.is_file():
-        sum_["error"] = "无 session_ledger.json（会话未完成？）"
-        return sum_
-    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        # 会话进行中/未最终化：campaign 信息走原始文件回退，其余观测照常统计
+        sum_["pending"] = True
+        ledger = {}
+    else:
+        sum_["pending"] = False
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     sum_["campaign"] = {
         "arm": ledger.get("arm"),
         "cycle_counts": ledger.get("cycle_outcome_counts"),
@@ -286,6 +469,7 @@ def summarize_session(session_dir: pathlib.Path) -> dict:
                                   "lines": sum(1 for _ in p.open(encoding="utf-8")) if p.exists() else 0}
                            for name, p in obs.items()}
     sum_["deep"] = _deep_metrics(data_root)
+    sum_["diff"] = _diff_metrics(session_dir, data_root)
     return sum_
 
 
@@ -294,7 +478,8 @@ def render(sessions: list[dict]) -> str:
     A = L.append
     A("# 进化会话观测汇总\n")
     for s in sessions:
-        A(f"## {s.get('campaign', {}).get('arm', s['session'])}")
+        A(f"## {s.get('campaign', {}).get('arm', s['session'])}"
+          + ("（会话进行中，未最终化）" if s.get("pending") else ""))
         if s.get("error"):
             A(f"- ❌ {s['error']}")
             continue
@@ -364,6 +549,27 @@ def render(sessions: list[dict]) -> str:
             ex = d["experiences"]
             A(f"- 经验: {ex['total']} 条 complexity={ex['complexity']} type={ex['objective_type']} "
               f"步{'-'.join(map(str,[ex['steps_total'],ex['error_steps']]))} 错误步率={ex['error_rate']}")
+        df = s.get("diff") or {}
+        if df:
+            t = df.get("totals") or {}
+            rv = df.get("review_branch") or {}
+            A(f"- 代码改动量: 提交级 committed_cycles={t.get('committed_cycles')} "
+              f"files={t.get('files')} +{t.get('insertions')}/-{t.get('deletions')} 行"
+              + (f"；未吸收评审分支 {rv.get('commits')} commits（{rv.get('files')} files "
+                 f"+{rv.get('insertions')}/-{rv.get('deletions')} 行）" if rv.get("commits") else "")
+              + f"；调用级 edit_calls={df['edit_churn']['edit_calls']}(ok={df['edit_churn']['ok']} "
+                f"err={df['edit_churn']['arg_or_gate_errors']}) "
+                f"files={df['edit_churn']['unique_files']} "
+                f"+{df['edit_churn']['insertions']}/-{df['edit_churn']['deletions']} 行")
+            for c in (df.get("per_cycle") or []):
+                if c.get("commit_sha"):
+                    A(f"    - {c['task_id']} {c['cycle_outcome']} {c['commit_sha']}: "
+                      f"{c['files']} files +{c['insertions']}/-{c['deletions']}"
+                      + (f" ({', '.join(c['paths'][:5])})" if c.get("paths") else ""))
+            for c in (rv.get("per_commit") or []):
+                A(f"    - [review-branch:{c['branch']}] {c['sha']}: "
+                  f"{c['files']} files +{c['insertions']}/-{c['deletions']}"
+                  + (f" ({', '.join(c['paths'][:5])})" if c.get("paths") else ""))
         A("")
     if len(sessions) == 2:
         a, b = sessions
@@ -376,6 +582,14 @@ def render(sessions: list[dict]) -> str:
                 A(f"| {key} | " + " | ".join(fmt.format(s["campaign"][key]) if s["campaign"][key] is not None else "—"
                                              for s in sessions) + " |")
             A(f"| 通用层占比 | " + " | ".join(str(s['files']['common_layer_ratio']) for s in sessions) + " |")
+            for key, label in (("files", "改动文件数(提交级)"), ("insertions", "新增行数(提交级)"),
+                               ("deletions", "删除行数(提交级)")):
+                A(f"| {label} | " + " | ".join(str((s.get('diff') or {}).get('totals', {}).get(key))
+                                               for s in sessions) + " |")
+            for key, label in (("edit_calls", "edit 调用数(调用级)"), ("unique_files", "触及文件数(调用级)"),
+                               ("insertions", "新增行数(调用级)"), ("deletions", "删除行数(调用级)")):
+                A(f"| {label} | " + " | ".join(str((s.get('diff') or {}).get('edit_churn', {}).get(key))
+                                               for s in sessions) + " |")
     return "\n".join(L)
 
 

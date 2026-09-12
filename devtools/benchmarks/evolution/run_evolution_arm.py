@@ -112,6 +112,18 @@ _CAMPAIGN_CONTRACT_SUFFIX = (
     "本任务运行在无项目作用域的实验环境：不要调用 journal_write/journal_read/"
     "workpad_read 等需要 project scope 的工具；里程碑记录改用 knowledge_write "
     "或 scratchpad_write。）"
+    "\n\n🚫 严禁修改发布面文件：VERSION、README.md、pyproject.toml、uv.lock、"
+    "docs/、site/、web/、.github/、Ouroboros.spec、build 脚本，以及任何版本号、"
+    "发布记录、安装页。触碰它们会触发 release 级 scope 评审（要求 ≥1M 上下文的"
+    "评审者并组装全部冻结契约工件），当前评审模型永远无法满足——提交必然被拒。"
+    "只修改功能代码（ouroboros/ 下的模块）和对应测试（tests/）。"
+    "\n\n⚠️ 必须严格执行的五步（不可跳过、不可停留在任何一步）："
+    "\n1. 探索：用 search_code/query_code/read_file 理解相关代码——最多 10 次工具调用"
+    "\n2. 实施：立即用 edit_text/edit_batch/write_file 修改代码（探索够了就动手，不要无限探索；"
+    "只改功能代码和测试，绝不碰上面的发布面文件）"
+    "\n3. 验证：用 run_command 运行相关测试"
+    "\n4. 提交：调用 commit_reviewed 提交代码——缺了这一步整个进化周期一律记为 no_op"
+    "\n5. 收尾：调用 request_restart"
 )
 
 
@@ -279,6 +291,43 @@ def snapshot_checkpoint_summary(data_root: pathlib.Path) -> None:
             _log(f"  absorbed {r.get('commit_sha', '')[:12]} | {str(r.get('campaign_objective') or '')[:60]}")
 
 
+def _campaign_live_status(data_root: pathlib.Path, since_ts: str = "") -> str:
+    """一行战役实时进展：tools.jsonl 中 8 位 hex task_id（战役主任务+子代理）
+    的工具调用聚合。``since_ts`` 只统计该时刻之后的行（ISO UTC 字符串比较），
+    避免把 resume 之前的历史调用误报成本次进展。"""
+    tools_path = data_root / "logs" / "tools.jsonl"
+    if not tools_path.is_file():
+        return ""
+    import re
+    hex8 = re.compile(r"^[0-9a-f]{8}$")
+    calls: list[dict] = []
+    for line in tools_path.read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if r.get("type") != "tool_call" or not hex8.match(str(r.get("task_id") or "")):
+            continue
+        if since_ts and str(r.get("ts") or "") < since_ts:
+            continue
+        calls.append(r)
+    if not calls:
+        return "campaign: （战役任务已派发，尚无工具调用）"
+    from collections import Counter
+    tools = Counter(str(r.get("tool")) for r in calls)
+    edits = sum(v for k, v in tools.items() if k in ("edit_text", "edit_batch", "write_file"))
+    tests = sum(v for k, v in tools.items() if k in ("run_command", "run_script"))
+    errs = sum(1 for r in calls if "TOOL_ARG_ERROR" in str(r.get("result_preview") or ""))
+    gate = (sum(1 for r in calls if "CORE_PROTECTION_BLOCKED" in str(r.get("result_preview") or ""))
+            + sum(1 for r in calls if "RESTART_BLOCKED" in str(r.get("result_preview") or "")))
+    return (f"campaign: 进行中 tasks={len({r.get('task_id') for r in calls})} "
+            f"calls={len(calls)} edits={edits} tests={tests} "
+            f"commit={tools.get('commit_reviewed', 0)} arg_err={errs} gate_blk={gate} "
+            f"| 最近: {calls[-1].get('tool')}")
+
+
 def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) -> dict:
     """Wait for a promotion signal to be consumed into a campaign cycle.
 
@@ -286,18 +335,31 @@ def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) ->
     """
     before = cycle_count(data_root)
     req = data_root / _REQUEST_FILE
-    req_seen = req.is_file()
+    consumed = False
+    poll_started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     deadline = time.time() + timeout_sec
+    tick = 0
     while time.time() < deadline:
         after = cycle_count(data_root)
         if after > before:
             _log(f"campaign: 新周期已记录（{before} → {after}）")
             return {"campaign": True, "cycles_before": before, "cycles_after": after}
-        if not req.is_file() and req_seen:
+        if not req.is_file() and not consumed:
             _log("campaign: promote 信号已被 supervisor 消费")
-            req_seen = False
+            consumed = True
+        tick += 1
+        if tick % 4 == 0:  # ~60s 心跳
+            status = _campaign_live_status(data_root, since_ts=poll_started)
+            if status:
+                _log("  " + status)
         time.sleep(15)
-    _log(f"campaign: 等待超时（{timeout_sec}s，无新周期；promote 可能被 cadence/决策拒绝）")
+    if consumed or cycle_count(data_root) > before:
+        reason = "战役仍在后台执行，本等待窗口内未落账（战役不受影响，周期行落账后可在 checkpoints 查看）"
+    elif req.is_file():
+        reason = "promote 请求仍在排队（已有战役在跑，结束后才会接力开下一场）"
+    else:
+        reason = "未见待消费的 promote 请求（cadence 未到期或决策拒绝）"
+    _log(f"campaign: 等待 {timeout_sec:.0f}s 无新周期——{reason}")
     return {"campaign": False, "cycles_before": before, "cycles_after": cycle_count(data_root)}
 
 
@@ -535,8 +597,23 @@ def _attest_skill(data_root: pathlib.Path, skill_dir: pathlib.Path) -> bool:
     return True
 
 
+def _skill_domain_tasks(skill_dir: pathlib.Path) -> list:
+    """读取技能本地的领域部署任务（<skill>/deploy_tasks.json，由
+    run_skill_deploy.py --gen-domain-tasks 按 SKILL.md 生成）。"""
+    p = skill_dir / "deploy_tasks.json"
+    if not p.is_file():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    tasks = data.get("tasks") if isinstance(data, dict) else data
+    return [t for t in (tasks or []) if isinstance(t, dict) and str(t.get("text") or "").strip()]
+
+
 def _run_deploy_phase(server, data_root: pathlib.Path, deploy_tasks_path: pathlib.Path,
-                      work_root: pathlib.Path, *, phase: str) -> dict:
+                      work_root: pathlib.Path, *, phase: str,
+                      only: frozenset | None = None, regression_n: int = 3) -> dict:
     """部署期执行（V2/V3 进化期；V0/V1 无技能自动跳过）。
 
     phase="baseline"：背书新生成技能 → 用原始版本跑固定部署任务集（前测）；
@@ -560,6 +637,8 @@ def _run_deploy_phase(server, data_root: pathlib.Path, deploy_tasks_path: pathli
     deployable = []
     for d in sorted(skills_root.iterdir()):
         if d.is_dir() and (d / ".self_authored.json").is_file():
+            if only is not None and d.name not in only:
+                continue
             deployable.append(d)
     if not deployable:
         summary["note"] = "无自写技能，部署期跳过"
@@ -570,10 +649,23 @@ def _run_deploy_phase(server, data_root: pathlib.Path, deploy_tasks_path: pathli
     else:
         summary["skills"] = [d.name for d in deployable]
     summary["note"] = f"skills={summary['skills']}"
+    edge = data.get("edge") or []
+    regression = shared[: max(0, int(regression_n))]
     log_entries = []
     for d in deployable:
         name = d.name
-        for t in shared:
+        # 每技能三类运行：edge（技能强制边界，测鲁棒性）→ domain（技能本地领域
+        # 任务，测技能价值与 GEPA 效果）→ regression（中性通用任务，测不拖累基线）。
+        # 通用任务不再强制"使用技能 <name>"——领域技能做不了 CSV 清洗，强制配对
+        # 只会产生归因噪声。
+        plan_runs = (
+            [{**t, "kind": "edge"} for t in edge]
+            + [{**t, "kind": "domain"} for t in _skill_domain_tasks(d)]
+            + [{**t, "kind": "regression"} for t in regression]
+        )
+        if not plan_runs:
+            continue
+        for t in plan_runs:
             text = str(t["text"]).replace("<name>", name)
             ws = work_root / f"{phase}-{name}-{t['id']}"
             _deploy_ws_setup(ws, str(t["id"]), assets_dir=deploy_tasks_path.parent / "assets")
@@ -582,10 +674,12 @@ def _run_deploy_phase(server, data_root: pathlib.Path, deploy_tasks_path: pathli
                 res = server.wait_task(tid, timeout=1500)
                 summary["runs"] += 1
                 status = str(res.get("status") or "")
-                log_entries.append({"phase": phase, "skill": name, "task": t["id"],
+                log_entries.append({"phase": phase, "kind": t.get("kind", "shared"),
+                                    "skill": name, "task": t["id"],
                                     "status": status, "task_id": str(tid)})
             except Exception as exc:  # noqa: BLE001 - per-task fault isolation
-                log_entries.append({"phase": phase, "skill": name, "task": t["id"],
+                log_entries.append({"phase": phase, "kind": t.get("kind", "shared"),
+                                    "skill": name, "task": t["id"],
                                     "status": "driver_error", "error": str(exc)})
     deploy_log = data_root / "state" / "deploy_log.jsonl"
     deploy_log.parent.mkdir(parents=True, exist_ok=True)
@@ -598,7 +692,8 @@ def _run_deploy_phase(server, data_root: pathlib.Path, deploy_tasks_path: pathli
 
 
 def _run_deploy_window(server, data_root: pathlib.Path, deploy_tasks_path: pathlib.Path,
-                       work_root: pathlib.Path) -> dict:
+                       work_root: pathlib.Path, *, only: frozenset | None = None,
+                       force_phase: str | None = None, regression_n: int = 3) -> dict:
     """统一部署窗口（语料喂完 + 最后一个战役落账后执行；幂等）。
 
     状态机（state/deploy_state.json）：
@@ -615,10 +710,11 @@ def _run_deploy_window(server, data_root: pathlib.Path, deploy_tasks_path: pathl
             dep_state = json.loads(dep_state_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             dep_state = {}
-    phase = dep_state.get("phase", "none")
+    phase = force_phase or dep_state.get("phase", "none")
     versions = dep_state.get("versions", {})
     if phase == "none":
-        dep = _run_deploy_phase(server, data_root, deploy_tasks_path, work_root, phase="baseline")
+        dep = _run_deploy_phase(server, data_root, deploy_tasks_path, work_root, phase="baseline", only=only,
+                                   regression_n=regression_n)
         _log(f"部署窗口 baseline: {dep['note']} runs={dep['runs']}")
         if dep["skills"]:
             stats_path = data_root / "state" / "skill_stats.json"
@@ -643,7 +739,8 @@ def _run_deploy_window(server, data_root: pathlib.Path, deploy_tasks_path: pathl
                    for name, s in stats.items()
                    if isinstance(s, dict) and s.get("evolution_version") != versions.get(name)}
         if evolved:
-            dep = _run_deploy_phase(server, data_root, deploy_tasks_path, work_root, phase="post")
+            dep = _run_deploy_phase(server, data_root, deploy_tasks_path, work_root, phase="post", only=only,
+                                   regression_n=regression_n)
             _log(f"部署窗口 post: skills={sorted(evolved)} runs={dep['runs']}")
             dep_state = {"phase": "post", "versions": versions}
     dep_state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -676,6 +773,9 @@ def main() -> int:
     ap.add_argument("--deploy-tasks", type=pathlib.Path,
                     default=REPO_DIR / "devtools" / "benchmarks" / "evolution" / "deploy_tasks" / "deploy_tasks.json",
                     help="(V2/V3) 部署期固定任务集清单（同集同序；spec 部署期设计）")
+    ap.add_argument("--deploy", action="store_true",
+                    help="(V2/V3) 语料喂完后自动执行统一部署窗口（默认关闭——技能部署"
+                         "改由 run_skill_deploy.py 独立控制）")
     args = ap.parse_args()
 
     if args.corpus is None:
@@ -691,7 +791,10 @@ def main() -> int:
     if args.live_settings is None:
         args.live_settings = default_live_settings()
         if args.live_settings is None:
-            _log("警告: 未找到 live settings.json，隔离 settings 将缺少 provider/model 键（可用 --live-settings 指定）")
+            if os.environ.get("OUROBOROS_MODEL"):
+                _log("未找到 live settings.json——环境变量已带模型槽位，隔离 settings 直接继承环境配置")
+            else:
+                _log("警告: 未找到 live settings.json 且环境无 OUROBOROS_MODEL，隔离 settings 将缺少 provider/model 键（可用 --live-settings 指定）")
         else:
             _log(f"live settings: {args.live_settings}")
 
@@ -901,7 +1004,7 @@ def main() -> int:
                 _log(f"wait_for_absorb: {exc}")
             # 统一部署窗口（V2/V3）：语料喂完 + 最后一个战役落账后执行
             # （含 max-absorbed / 预算触发提前停机的收尾路径）。幂等：phase=post 后不再动作。
-            if args.arm in ("V2", "V3"):
+            if args.arm in ("V2", "V3") and args.deploy:
                 try:
                     _run_deploy_window(server, data_root, args.deploy_tasks, session_dir / "deploy_ws")
                 except Exception as exc:  # noqa: BLE001 - deploy window must not kill teardown

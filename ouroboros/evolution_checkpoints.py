@@ -181,14 +181,26 @@ def append_evolution_checkpoint(
     rounds: int = 0,
     transaction: Dict[str, Any] | None = None,
 ) -> None:
-    """Persist a lightweight checkpoint after an evolution cycle."""
+    """Persist a lightweight checkpoint after an evolution cycle.
+
+    Schema-aligned with :func:`append_cycle_outcome_checkpoint`: carries the
+    top-level ``kind="cycle_outcome"`` / ``cycle_outcome`` / ``commit_sha``
+    tags so the Track-B consumer (``_pending_cycle_rows``) and the runner's
+    cycle counters see task-done outcomes (incl. no_op) directly — previously
+    the outcome lived only inside ``transaction`` and those readers skipped
+    every task-done row.
+    """
+    tx = transaction if isinstance(transaction, dict) else {}
     memory = pathlib.Path(drive_root) / "memory"
     entry = {
         "schema_version": 1,
+        "kind": "cycle_outcome",
         "ts": utc_now_iso(),
         "task_id": str(task_id or ""),
         "campaign_id": str((campaign or {}).get("id") or ""),
         "campaign_objective": str((campaign or {}).get("objective") or ""),
+        "cycle_outcome": str(tx.get("cycle_outcome") or ""),
+        "commit_sha": str(tx.get("commit_sha") or ""),
         "git_sha": _git_value(pathlib.Path(repo_dir), ["rev-parse", "HEAD"]),
         "git_branch": _git_value(pathlib.Path(repo_dir), ["rev-parse", "--abbrev-ref", "HEAD"]),
         "identity_sha256": _sha_file(memory / "identity.md"),
@@ -205,6 +217,6 @@ def append_evolution_checkpoint(
         ),
         "rounds": int(rounds or 0),
     }
-    if isinstance(transaction, dict) and transaction:
-        entry["transaction"] = dict(transaction)
+    if tx:
+        entry["transaction"] = dict(tx)
     append_jsonl(pathlib.Path(drive_root) / CHECKPOINTS_REL, entry)

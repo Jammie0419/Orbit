@@ -472,7 +472,21 @@ class TrajectoryExperienceLearner:
                     except Exception:
                         continue
                     if not str(row.get("kind") or "").startswith("cycle_outcome"):
-                        continue
+                        # Legacy task-done rows (pre schema alignment): top-level
+                        # kind/cycle_outcome absent — recover the outcome from the
+                        # embedded transaction so no_op cycles still reach Track B
+                        # instead of being silently skipped forever.
+                        tx = row.get("transaction")
+                        if isinstance(tx, str):
+                            try:
+                                tx = json.loads(tx)
+                            except Exception:
+                                tx = {}
+                        legacy = str((tx or {}).get("cycle_outcome") or "") \
+                            if isinstance(tx, dict) else ""
+                        if legacy not in {"absorbed", "abandoned", "no_op"}:
+                            continue
+                        row = {**row, "kind": "cycle_outcome", "cycle_outcome": legacy}
                     if str(row.get("cycle_outcome") or "") not in {
                             "absorbed", "abandoned", "no_op"}:
                         continue
