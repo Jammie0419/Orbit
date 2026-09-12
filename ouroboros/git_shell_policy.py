@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
+import re
 import os
 from typing import Any
 
@@ -430,15 +432,37 @@ def evolution_shell_commit_block_reason(raw_cmd: Any) -> str:
     evolution task-type + switch; this function only classifies the command.
     Other shell git (clone/checkout/log/diff/reset-scoped inspection) stays allowed.
     """
-    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
+    raw = raw_cmd
+    if isinstance(raw, str):
+        # run_command 有时收到 JSON 编码的 cmd 字符串（round-11 实测）：解码成真实
+        # argv 再解析，否则 `["git",` 这类括号引号粘连 token 会让 'git' 精确匹配失败。
+        s = raw.strip()
+        if s[:1] in "[{":
+            try:
+                loaded = json.loads(s)
+                if isinstance(loaded, list):
+                    raw = loaded
+                elif isinstance(loaded, dict) and isinstance(loaded.get("cmd"), list):
+                    raw = loaded["cmd"]
+            except Exception:
+                pass
+    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw)))
     if not argv:
-        return ""
+        # JSON 解码失败时的兜底：token 清洗后重扫（剥 []{}'", 引号再比名字）
+        cleaned = [re.sub(r"[\[\]{}',\"\\]", "", str(t)).strip() for t in shell_argv(raw)]
+        argv = [c for c in cleaned if c]
+        if not argv:
+            return ""
+        if any(c == "git" for c in cleaned):
+            return ("git commit via shell is blocked in evolution tasks: shell commits "
+                    "carry no review receipt and are never absorbed. Use the "
+                    "commit_reviewed tool to commit.")
     first = pathlib.PurePath(argv[0]).name.lower()
     if first in {"bash", "sh", "zsh"}:
         inline = shell_command_string(argv)
         return evolution_shell_commit_block_reason(inline) if inline else ""
     for idx, token in enumerate(argv):
-        if pathlib.PurePath(str(token)).name.lower() != "git":
+        if pathlib.PurePath(str(token).strip("\'\",[]")).name.lower() != "git":
             continue
         parts = argv[idx + 1:]
         skip_next = False
