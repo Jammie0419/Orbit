@@ -420,6 +420,47 @@ def is_readonly_git_command(raw_cmd: Any) -> bool:
     return saw_git
 
 
+def evolution_shell_commit_block_reason(raw_cmd: Any) -> str:
+    """Block ``git commit`` (and --amend) via shell for EVOLUTION campaign tasks.
+
+    The campaign's only sanctioned commit path is ``commit_reviewed`` — its receipt
+    is what the restart/absorb gates verify. Round-10 smoke: the campaign agent
+    learned to bypass the review chain with a direct shell commit; the work then
+    has no receipt, the cycle no_ops, and the run is wasted. Callers confirm the
+    evolution task-type + switch; this function only classifies the command.
+    Other shell git (clone/checkout/log/diff/reset-scoped inspection) stays allowed.
+    """
+    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
+    if not argv:
+        return ""
+    first = pathlib.PurePath(argv[0]).name.lower()
+    if first in {"bash", "sh", "zsh"}:
+        inline = shell_command_string(argv)
+        return evolution_shell_commit_block_reason(inline) if inline else ""
+    for idx, token in enumerate(argv):
+        if pathlib.PurePath(str(token)).name.lower() != "git":
+            continue
+        parts = argv[idx + 1:]
+        skip_next = False
+        sub = ""
+        for tok in parts:
+            tok = str(tok)
+            if skip_next:
+                skip_next = False
+                continue
+            if tok.startswith("-"):
+                if tok in ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix"):
+                    skip_next = True
+                continue
+            sub = tok.lower()
+            break
+        if sub in {"commit"}:
+            return ("git commit via shell is blocked in evolution tasks: shell commits "
+                    "carry no review receipt and are never absorbed. Use the "
+                    "commit_reviewed tool to commit.")
+    return ""
+
+
 def run_shell_git_block_reason(raw_cmd: Any, *, allow_network: bool = True) -> str:
     argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
     if not argv:

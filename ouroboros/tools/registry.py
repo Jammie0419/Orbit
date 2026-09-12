@@ -2710,6 +2710,15 @@ class ToolRegistry:
 
         if not shell_argv(raw_cmd):
             return None
+        # Evolution campaigns must commit through commit_reviewed (the receipt is
+        # what restart/absorb verify) — a direct shell commit bypasses the review
+        # chain, leaves no receipt, and the cycle no_ops (round-10 smoke case).
+        if (str(getattr(self._ctx, "current_task_type", "") or "") == "evolution"):
+            from ouroboros.config import get_evolution_block_shell_commit
+            from ouroboros.git_shell_policy import evolution_shell_commit_block_reason
+            if get_evolution_block_shell_commit():
+                if block := evolution_shell_commit_block_reason(raw_cmd):
+                    return block
         if workspace_mode and not acting_self_worktree:
             work_dir = self._resolved_shell_cwd(args, binding)
             if isinstance(work_dir, str):  # a cwd block message, not a path

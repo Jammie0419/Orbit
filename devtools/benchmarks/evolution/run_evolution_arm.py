@@ -291,6 +291,29 @@ def snapshot_checkpoint_summary(data_root: pathlib.Path) -> None:
             _log(f"  absorbed {r.get('commit_sha', '')[:12]} | {str(r.get('campaign_objective') or '')[:60]}")
 
 
+def _provider_probe(timeout: float = 45.0) -> None:
+    """1-token 真实调用验证 provider 链路（桥在线 + 密钥有效 + 模型可达）。
+    失败 → SystemExit 带明确原因，喂料开始前终止。"""
+    from ouroboros.config import _main_model
+    from ouroboros.llm import LLMClient
+
+    client = LLMClient()
+    try:
+        msg, _u = client.chat(
+            [{"role": "user", "content": "Reply with exactly: OK"}],
+            model=_main_model(), max_tokens=8, timeout=timeout,
+        )
+    except Exception as exc:
+        raise SystemExit(
+            f"provider 探活失败——模型链路不可用，中止喂料。"
+            f"检查 OPENAI_COMPATIBLE_BASE_URL/KEY 与模型网关后重试。原因: {exc}"
+        )
+    text = str((msg or {}).get("content") or "").strip()
+    if not text:
+        raise SystemExit("provider 探活失败：模型返回空内容（检查网关与模型 id）")
+    _log(f"provider 探活: ✅ ({text[:24]})")
+
+
 def _campaign_live_status(data_root: pathlib.Path, since_ts: str = "") -> str:
     """一行战役实时进展：tools.jsonl 中 8 位 hex task_id（战役主任务+子代理）
     的工具调用聚合。``since_ts`` 只统计该时刻之后的行（ISO UTC 字符串比较），
@@ -946,6 +969,14 @@ def main() -> int:
         try:
             _log(f"starting isolated server on {server.base_url} …")
             server.start(ready_timeout=240)
+            # 启动探活：1-token 真实调用走完整 provider 链路。桥断/密钥错时立刻
+            # 明确失败退出，杜绝垃圾轮（round-10 两次事故的直接教训）。
+            try:
+                _provider_probe()
+            except SystemExit:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise SystemExit(f"provider 探活异常: {exc}")
             for pos, rec in enumerate(remaining, 1):
                 i = start_idx + pos
                 if absorbed_cycles_done(data_root) - absorbed_before >= args.max_absorbed:
@@ -1012,6 +1043,18 @@ def main() -> int:
             server.stop()
     else:
         _log("所有语料已在先前会话处理完毕（进度文件），跳过喂料直接收尾")
+
+    # Track-B backfill: credit any cycle rows not yet consumed before closing the
+    # session (the consumer otherwise only runs at cadence-due post-task passes —
+    # cycles that land after the last due record never reached the ledger).
+    try:
+        from ouroboros.evolution.trajectory_experience_learner import TrajectoryExperienceLearner
+        from ouroboros.llm import LLMClient
+        consumed = TrajectoryExperienceLearner(data_root, llm_client=LLMClient()).consume_pending_cycles()
+        if consumed:
+            _log(f"Track-B 补消费: {consumed} 个周期入账")
+    except Exception as exc:  # noqa: BLE001 - backfill must not kill teardown
+        _log(f"Track-B 补消费失败（不影响收尾）: {exc}")
 
     # §10.7 snapshot + ledger
     rc, _ = _git(["tag", f"{args.arm}-evolved"], clone)

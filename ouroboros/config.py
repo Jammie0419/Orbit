@@ -204,6 +204,7 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # stay pending review until the existing review gates pass. Disabled == no
     # skill mutation and no router scoring change.
     "OUROBOROS_SKILL_EVOLUTION": "false",
+    "OUROBOROS_EVOLUTION_BLOCK_SHELL_COMMIT": "true",
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5.2",
     # web_search backend pin: auto (default OpenAI-first cascade) | ddgs (pure
     # retrieval, no second LLM — for fixed-model runs) | openai | openrouter | anthropic.
@@ -817,6 +818,16 @@ def get_multi_agent_evolver_enabled() -> bool:
     LLM budget on experience extraction and planning. Disabled == exactly the
     V4 post-task pipeline behavior."""
     return _settings_flag_enabled("OUROBOROS_MULTI_AGENT_EVOLVER")
+
+
+def get_evolution_block_shell_commit() -> bool:
+    """Block mutating ``git commit`` via shell during EVOLUTION campaign tasks.
+    Default ON: the campaign's only sanctioned commit path is ``commit_reviewed``
+    (its receipt is what the restart/absorb gates verify). Round-10 smoke: the
+    campaign agent learned to bypass the review chain with a direct shell commit —
+    the work then has no receipt, the cycle no_ops, and the run is wasted. Shell
+    git stays otherwise allowed (clone/checkout/log); only commit is fenced."""
+    return _settings_flag_enabled("OUROBOROS_EVOLUTION_BLOCK_SHELL_COMMIT")
 
 
 def get_skill_evolution_enabled() -> bool:
