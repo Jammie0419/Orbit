@@ -498,6 +498,17 @@ def _gather_scope_packs(
         set(snapshot_included_paths or frozenset())
         | {doc for doc in _CANONICAL_CONTEXT_DOCS if (repo_dir / doc).is_file()}
     )
+    # The ADDED lines of the staged diff drive the dynamic required set: frozen
+    # surfaces this change touches / names / registers are owed in full; the
+    # rest stay manifest-only (ibl-8625df615f4e architectural fix).
+    try:
+        _staged = capture_staged_diff(repo_dir)
+    except Exception:
+        _staged = ""
+    diff_added_text = "\n".join(
+        line[1:] for line in _staged.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
     _input_limit = _effective_scope_input_limit(scope_model=scope_model)
     try:
         atlas = compile_review_context_atlas(
@@ -513,6 +524,7 @@ def _gather_scope_packs(
                 title="Generated Scope Atlas",
                 drive_root=drive_root,
                 compact_manifest=compact,
+                diff_added_text=diff_added_text,
             )
         )
         # Set the manifest FIRST: disclosure accompanies the refusal, never replaces it (P3).

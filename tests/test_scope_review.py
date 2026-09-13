@@ -2534,15 +2534,17 @@ def _repo_with_oversized_required_prompt(tmp_path, required_bytes=935_000):
     (tmp_path / "prompts").mkdir(exist_ok=True)
     # Force-included by prefix => `required`, and never touched by this commit.
     (tmp_path / "prompts" / "huge.md").write_text("x" * required_bytes, encoding="utf-8")
-    (tmp_path / "ok.py").write_text("print(1)\n", encoding="utf-8")
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=T", "commit", "-m", "init"],
-        cwd=str(tmp_path), capture_output=True,
-    )
-    (tmp_path / "ok.py").write_text("print(2)\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+    # 动态必需集：该 fixture 测的是"未触碰的必需工件装不下"——需要 git 仓库 +
+    # 暂存一个提及 prompts/huge.md 的变更，使其保持 owed-in-full（否则动态设计
+    # 下未触碰的冻结工件不再是必需）。
+    subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.test"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base", "--no-gpg-sign"], cwd=str(tmp_path), check=True, capture_output=True)
+    (tmp_path / "docs" / "release.md").write_text(
+        "Update prompts/huge.md wording for the new release.\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/release.md"], cwd=str(tmp_path), check=True, capture_output=True)
 
 
 def test_unassembled_required_terminal_names_the_artifact_not_a_phantom_overflow(

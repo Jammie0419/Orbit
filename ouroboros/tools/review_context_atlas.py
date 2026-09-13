@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import pathlib
 import re
 from collections import Counter
@@ -203,6 +204,13 @@ class ReviewContextAtlasRequest:
     # scope/plan review never pass it (deep self-review is the only producer).
     # Additive on top of — never replacing — the anchor-relative scoring.
     centrality_scores: Mapping[str, float] = field(default_factory=dict)
+    # The ADDED lines (no '+++' header) of the staged diff. Drives the dynamic
+    # required set: frozen surfaces are required when THIS change touches, names,
+    # or registers them — not all 46 unconditionally (round-11: the static
+    # all-surfaces pack crossed the 1M reviewer window as the repo grew, refusing
+    # every self-mod commit regardless of diff quality; the repo's own backlog
+    # ibl-8625df615f4e filed the architectural fix).
+    diff_added_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -315,6 +323,12 @@ def compile_review_context_atlas(req: ReviewContextAtlasRequest) -> ReviewContex
             except Exception as git_exc:
                 raise RuntimeError(f"git tracked path inventory unavailable: {exc}; fallback failed: {git_exc}") from git_exc
 
+    _dyn_on = str(os.environ.get("OUROBOROS_SCOPE_DYNAMIC_REQUIRED", "true")).strip().lower() \
+        not in {"0", "false", "off"}
+    dynamic_required = (
+        _dynamic_force_include_set(req.anchors, tracked_paths, req.diff_added_text)
+        if _dyn_on else None
+    )
     facts_by_path = {
         rel: _build_file_facts(
             repo_dir,
@@ -324,6 +338,7 @@ def compile_review_context_atlas(req: ReviewContextAtlasRequest) -> ReviewContex
             req.include_tests,
             diff_only_included=diff_only_included,
             inventory_fact=inventory_by_path.get(rel),
+            dynamic_required=dynamic_required,
         )
         for rel in tracked_paths
         if rel
@@ -475,6 +490,7 @@ def _build_file_facts(
     include_tests: bool,
     diff_only_included: frozenset[str] = frozenset(),
     inventory_fact: Any = None,
+    dynamic_required: frozenset[str] | None = None,
 ) -> _FileFacts:
     facts = _FileFacts(rel_path=rel, language=pathlib.PurePosixPath(rel).suffix.lstrip("."))
     if inventory_fact is not None:
@@ -486,7 +502,9 @@ def _build_file_facts(
     # BIBLE P3 / D17: requiredness is a property of the path and the request,
     # decided HERE — before any classification below can drop the artifact.
     # Every early return sees the same answer; no branch re-derives it.
-    force_include = _is_force_include(rel)
+    force_include = _is_force_include(rel) and (
+        dynamic_required is None or rel in dynamic_required
+    )
     is_anchor = rel in anchors
     is_canonical = rel in _CANONICAL_CONTEXT_DOCS
     facts.required = force_include or is_anchor or is_canonical
@@ -775,6 +793,36 @@ def _is_force_include(rel: str) -> bool:
         or any(rel.startswith(prefix) for prefix in PROTECTED_RUNTIME_PATH_PREFIXES)
         or any(rel.startswith(prefix) for prefix in _FORCE_INCLUDE_PREFIXES)
     )
+
+
+def _dynamic_force_include_set(
+    anchors: Any, tracked_paths: Any, diff_added_text: str,
+) -> frozenset[str]:
+    """Diff-adjacent subset of the force-include surfaces (the dynamic required set).
+
+    BIBLE P3 owed-in-full, applied AT THE SURFACES THIS CHANGE CAN AFFECT: a
+    frozen surface is required when the staged change (a) touches it, (b) names
+    it (path / dotted module / basename in the added lines), or (c) registers a
+    tool (the registration invariant pulls the registry). Everything frozen
+    still appears in the coverage manifest — the reviewer sees what exists; only
+    the full-content obligation narrows. Kill switch:
+    OUROBOROS_SCOPE_DYNAMIC_REQUIRED=0 restores the static all-surfaces pack."""
+    req = {str(a) for a in (anchors or ()) if a}
+    text = diff_added_text or ""
+    for rel in tracked_paths or ():
+        rel_s = str(rel)
+        if not _is_force_include(rel_s) or rel_s in req:
+            continue
+        dotted = (rel_s[:-3] if rel_s.endswith(".py") else rel_s).replace("/", ".")
+        base = rel_s.rsplit("/", 1)[-1]
+        if rel_s in text or dotted in text or (base in text and len(base) > 8):
+            req.add(rel_s)
+    if re.search(r"def get_tools\b|register_tool\b|TOOL_POLICY\b", text):
+        for rel in tracked_paths or ():
+            rel_s = str(rel)
+            if rel_s.endswith("tools/registry.py"):
+                req.add(rel_s)
+    return frozenset(req)
 
 
 def atlas_required_beyond_diff(rel: str) -> bool:

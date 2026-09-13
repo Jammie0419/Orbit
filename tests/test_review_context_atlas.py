@@ -135,6 +135,8 @@ def test_atlas_force_includes_protected_workflow_even_under_skipped_github_dir(t
                 "assets/logo.txt",
                 "main.py",
             ),
+            # 动态必需集：diff 提及 ci.yml（工作流变更），使其保持 owed-in-full
+            diff_added_text="Update .github/workflows/ci.yml to cache dependencies",
             fixed_prompt_tokens=100,
             target_total_tokens=20_000,
             hard_total_tokens=25_000,
@@ -336,6 +338,10 @@ def test_atlas_required_removed_by_shrink_wave_is_the_same_assembly_failure(tmp_
         ReviewContextAtlasRequest(
             repo_dir=tmp_path,
             tracked_paths=tuple(f"prompts/p_{idx}.md" for idx in range(6)),
+            # 动态必需集：diff 提及全部 prompts 文件（发布面更新），保持 owed-in-full
+            diff_added_text="Update "
+            + ", ".join(f"prompts/p_{idx}.md" for idx in range(6))
+            + " for the new release notes",
             fixed_prompt_tokens=100,
             target_total_tokens=4_000,
             hard_total_tokens=8_000,
@@ -449,6 +455,8 @@ def test_atlas_oversized_required_artifact_is_a_typed_assembly_failure(tmp_path)
         ReviewContextAtlasRequest(
             repo_dir=tmp_path,
             tracked_paths=("prompts/huge.md", "ok.py"),
+            # 动态必需集：diff 提及 huge.md（发布面超限变更），保持 owed-in-full
+            diff_added_text="Update prompts/huge.md declared runtime limits",
         )
     )
 
