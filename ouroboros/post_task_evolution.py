@@ -369,20 +369,21 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         if resolve_project_id(task):
             return None
         cadence = get_post_task_evolution_cadence()
-        if cadence == "off":
-            return None
         drive_root = pathlib.Path(str(env.drive_root))
         force = not cadence.startswith("llm")
-        if cadence.startswith("every_n") and not _counter_due(drive_root, _parse_every_n(cadence)):
-            return None
-        if (drive_root / _REQUEST_REL).exists():
-            # A promotion signal is already queued and not yet consumed — writing
-            # another would atomically OVERWRITE it and lose that objective
-            # (smoke_test_12: 2 of 6 promotions were lost this way while a
-            # >30min cycle outlived the driver's poll window). The queued signal
-            # is authoritative; skip this record entirely (also saves the
-            # decision LLM call).
-            return None
+        # The promotion gates decide ONLY whether a campaign cycle may be
+        # proposed — never whether the per-task learning layers below (Track A
+        # extraction, skill pipeline) run. The old nesting (gates → learning →
+        # skill pipeline) silently throttled those layers to the promotion
+        # cadence: every_n:5 would have cut skill chances to 1/5, --cadence off
+        # (screening) to zero, and the queued-request guard to zero whenever a
+        # cycle was in flight. Each layer keeps its own switch; short-circuit
+        # order preserves the counter semantics (only every_n advances it).
+        promotion_due = not (
+            cadence == "off"
+            or (cadence.startswith("every_n") and not _counter_due(drive_root, _parse_every_n(cadence)))
+            or (drive_root / _REQUEST_REL).exists()
+        )
         # Evolution layer (PAPER 不足 4+5+7, OUROBOROS_MULTI_AGENT_EVOLVER): when
         # enabled — and ONLY then — extract trajectory experience (A: this task's
         # trace; B: finished cycle traces via the cursor), feed a strategy digest
@@ -435,6 +436,10 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
                 run_skill_evolution_step(env, task, reflection_entry, llm_client)
         except Exception:
             log.debug("post_task_evolution: skill evolution step failed", exc_info=True)
+        if not promotion_due:
+            # Per-task learning above already ran; only the campaign-cycle
+            # proposal is gated off here.
+            return None
         decision = _decide_promotion(env, task, reflection_entry, llm_client, force=force,
                                      strategy_digest=strategy_digest)
         if not decision or not decision.get("promote") or not decision.get("objective"):
