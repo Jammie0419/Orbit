@@ -486,6 +486,7 @@ def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) ->
     poll_started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     deadline = time.time() + timeout_sec
     tick = 0
+    idle_ticks = 0
     while time.time() < deadline:
         after = cycle_count(data_root)
         if after > before:
@@ -494,6 +495,23 @@ def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) ->
         if not req.is_file() and not consumed:
             _log("campaign: promote 信号已被 supervisor 消费")
             consumed = True
+        # Early exit: no queued request AND no in-flight cycle means nothing can
+        # land in this window — without this, every non-promote record burned
+        # the full timeout (~30min; a 130-record every_n:5 real run would waste
+        # ~2 days). Two consecutive idle reads gate the consume→enqueue race.
+        try:
+            camp = json.loads(
+                (data_root / "state" / "evolution_campaign.json").read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            camp = {}
+        if not req.is_file() and not camp.get("active_transaction") and after == before:
+            idle_ticks += 1
+            if idle_ticks >= 2:
+                _log("campaign: 无待消费请求且无在途周期——提前结束本轮等待")
+                return {"campaign": False, "cycles_before": before,
+                        "cycles_after": after, "idle": True}
+        else:
+            idle_ticks = 0
         tick += 1
         if tick % 4 == 0:  # ~60s 心跳
             status = _campaign_live_status(data_root, since_ts=poll_started)

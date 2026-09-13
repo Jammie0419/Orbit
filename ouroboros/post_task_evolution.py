@@ -375,6 +375,14 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         force = not cadence.startswith("llm")
         if cadence.startswith("every_n") and not _counter_due(drive_root, _parse_every_n(cadence)):
             return None
+        if (drive_root / _REQUEST_REL).exists():
+            # A promotion signal is already queued and not yet consumed — writing
+            # another would atomically OVERWRITE it and lose that objective
+            # (smoke_test_12: 2 of 6 promotions were lost this way while a
+            # >30min cycle outlived the driver's poll window). The queued signal
+            # is authoritative; skip this record entirely (also saves the
+            # decision LLM call).
+            return None
         # Evolution layer (PAPER 不足 4+5+7, OUROBOROS_MULTI_AGENT_EVOLVER): when
         # enabled — and ONLY then — extract trajectory experience (A: this task's
         # trace; B: finished cycle traces via the cursor), feed a strategy digest
