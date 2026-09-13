@@ -76,3 +76,30 @@ cd /mnt/disk2/lzm/ouroboros && .venv/bin/python devtools/benchmarks/evolution/ru
 - 收停条件：语料喂完或 `--max-absorbed`（默认 10）触发；runner 自行收尾出 ledger。
 - 验收口径：`absorbed_cycles_done ≥ 1`；对照 smoke_test_fix 的环节-证据映射表
   （EVOLUTION_SMOKE_ANALYSIS.md）逐环节核对。
+
+---
+
+## 第五轮复盘补遗：第十一轮（smoke_test_11，2026-09-13）
+
+**现象**：11 条语料全部喂完，7 个周期（7 个不同 objective——晋升覆盖问题确认已修复）全部
+no_op；15 次 commit_reviewed 全部被拒；收尾时 main() 崩溃（`I/O operation on closed file`）。
+
+**根因：1M owner-ack 是会话本地状态，不随代码走。** 动态必需集（b347d06b）工作正常——冻结面
+被正确降级，但另一形态的死墙接棒：**不可约简 scope 提示**（canonical docs + checklist +
+staged diff）实测 ~216K token（ARCHITECTURE.md 单文件 482KB ≈ 117K；DEVELOPMENT 37K +
+CHECKLISTS 22K + BIBLE 10K），而新会话 data 目录里 owner_acks=0 → 评审窗口未知 → 保守 200K
+→ 输入预算压到 90909。smoke_test_fix 的 cycle 12 能通过，靠的是当时手动录进那个会话的 1M ack。
+**修复**（73f192c8）：runner 在会话创建时从 `OUROBOROS_OWNER_WINDOW_TOKENS` 播种 ack（无断言
+则保持 fail-closed），指纹验证与生效记录一致（59d5cf7fd124e022）。
+
+**其他观察**：
+- cycle 1 与 cycle 7 以 `degraded tool_failure` 收尾（126 与 58 rounds），cycle 8 派发后 30
+  分钟零工具调用——桥接间歇性故障的同一签名；非机制问题。
+- Bible P6 顾问发现出现 5 次：agent 新增 `ouroboros/` 模块时未同步登记
+  `docs/ARCHITECTURE.md`（不阻塞提交，记录为能力层数据）。
+- 收尾崩溃：ledger 段先 close 日志句柄后打日志（顺序 bug）；ledger JSON 本身已写出。已修。
+- agent 暂存内容全程干净（仅功能代码 + 测试，无 uv.lock/生成物）——契约约束有效。
+
+**教训入册**：owner-ack 这类"会话内状态"必须由 session 供给方（runner）从同一环境变量派生播种，
+否则换会话即失效——与 P1 的 .env 教训同构：**依赖 operator 手动步骤的配置都会在下一个会话里变成
+一颗隐雷。**
