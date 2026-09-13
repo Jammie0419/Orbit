@@ -958,7 +958,9 @@ def main() -> int:
                          "(default: $OUROBOROS_DATA_DIR/settings.json, then ~/Ouroboros/data, then ~/.ouroboros)")
     ap.add_argument("--resume", action="store_true",
                     help="Resume an existing session dir (feeds only the records not yet processed)")
-    ap.add_argument("--cadence", default="every_n:5", help="OUROBOROS_POST_TASK_EVOLUTION_CADENCE")
+    ap.add_argument("--cadence", default=None,
+                    help="OUROBOROS_POST_TASK_EVOLUTION_CADENCE（off | llm | every_n:N；"
+                         "默认 None = 依次取 .env/环境变量，再取 every_n:5）")
     ap.add_argument("--budget", type=float, default=200.0, help="Per-session TOTAL_BUDGET (USD)")
     ap.add_argument("--campaign-timeout", type=float, default=600.0,
                     help="Seconds to poll for one campaign cycle after each promote")
@@ -976,6 +978,13 @@ def main() -> int:
     _env_n = _load_dotenv_env()
     if _env_n:
         _log(f".env: loaded {_env_n} var(s) into the environment (existing env wins)")
+
+    # cadence 三级优先级：显式 --cadence > .env/环境变量 > 默认 every_n:5。
+    # args.cadence 为 None（未在命令行给出）时才回落到环境——之后 env 注入处对
+    # 显式 flag 用直接赋值（CLI 声明压过 .env），未给出时 setdefault（.env 生效）。
+    _cadence_from_cli = args.cadence is not None
+    if not _cadence_from_cli:
+        args.cadence = os.environ.get("OUROBOROS_POST_TASK_EVOLUTION_CADENCE") or "every_n:5"
 
     if args.corpus is None:
         candidates = sorted((REPO_DIR / "bench_runs" / "evolution_corpus").glob("gaia_corpus_*.jsonl"))
@@ -1125,8 +1134,12 @@ def main() -> int:
     # --cadence 也必须注入：maybe_promote 的 getter 只读环境变量，缺失时回退默认
     # "llm"（每条语料由决策 LLM 自由决定是否晋升）——--cadence every_n:N 会被
     # 静默忽略，计数器文件根本不会建立。smoke_test_12 因此跑成了每条语料一次
-    # 战役；真跑时治疗剂量将完全失控。
-    os.environ.setdefault("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", args.cadence)
+    # 战役；真跑时治疗剂量将完全失控。显式 CLI flag 直接赋值（压过 .env）；
+    # 未给出时 setdefault（.env/已有环境生效）。
+    if _cadence_from_cli:
+        os.environ["OUROBOROS_POST_TASK_EVOLUTION_CADENCE"] = args.cadence
+    else:
+        os.environ.setdefault("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", args.cadence)
     for _env_key, _env_val in ARM_SWITCHES.get(args.arm.upper(), {}).items():
         os.environ.setdefault(_env_key, _env_val)
     # 旁模型一致性：ouroboros 的模型 getter 只读环境变量（缺失回退默认 grok-4.5），
