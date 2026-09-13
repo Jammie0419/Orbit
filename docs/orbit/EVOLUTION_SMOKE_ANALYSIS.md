@@ -298,11 +298,15 @@ cat <session>/data/state/step_credits.jsonl            # 步骤信用（key/drag
 
 - `b347d06b` 动态必需集：冻结工件仅在 diff 相邻（touched/被提名/注册工具）时 required，其余 manifest-only；`OUROBOROS_SCOPE_DYNAMIC_REQUIRED=0` 可回退静态包。323 个相关测试全绿（atlas 20 + scope 150 + commit 链路 153）。修复 fixture 残留 9 行旧尸体代码（曾把 staged diff 顶掉导致误判）。
 
-### 运营层事故与教训（非代码缺陷）
+### 运营层事故与教训（非代码缺陷）— 已于 3f423435 修复为驱动层机制
 
-1. **隔离 server 需要显式 env**：provider 凭据走 env 白名单透传（server_runner.py:96），新 shell 未 source `.env` 时启动即 "No supported provider"。触发脚本应自带 `.env` 加载（后续可加，非阻塞）。
-2. **隔离重启需外部驱动**：`waiting_for_restart` 由 boot reconcile 收敛，trigger 脚本未实现重启步——手动重启 server 后立即吸收。runner 正常路径不受影响。
-3. **objective 重复熔断（3/3）**：同一 objective 连续 no_op 三次后战役自动暂停——这是 BUG3 防自维护回路的正确行为，换目标即恢复。
+1. **隔离 server 需要显式 env**：provider 凭据走 env 白名单透传（server_runner.py:96），新 shell 未 source `.env` 时启动即 "No supported provider"。**已修复**：runner 启动自动加载 `<repo>/.env`（现有环境变量优先，支持 `export KEY=` 行式）。
+2. **隔离重启需外部驱动**：`restart_request` 事件在 EVENT_HANDLERS 中无消费者（产品里靠外部 launcher re-exec），隔离部署无人执行重启——周期永远停在 waiting_for_restart（本会话的 absorbed 是手动反弹换来的）。**已修复**：`IsolatedServer.maybe_bounce_for_restart()` 在信号出现且队列空闲时反弹一次 server（幂等键 = marker mtime + campaign updated_at），接入 `wait_for_absorb`（且排在 idle 退出之前——已暂存的 marker 不得被误判为"无事发生"）和 runner 逐记录边界（否则一个待重启周期会经 enqueue 闸门阻塞后续所有周期）。
+3. **objective 重复熔断（3/3）**：同一 objective 连续 no_op 三次后战役自动暂停——这是 BUG3 防自维护回路的正确行为，换目标即恢复。设计内，不修。
+
+### 弱模型能力层防护（P2 机制化，3f423435）
+
+scratchpad 污染防护已机制化：`_scratchpad_hygiene()` 在每条记录边界和 finalize 运行，只中和**构造上可验证**的断言——契约关键工具（commit_reviewed/request_restart）"不可调用"类谎言、把设计内栅栏误述为"提交基建不可达"、以及"勿重试"类越权指令。原文保留在可见修正横幅之下（可审计、不静默删除），命中记录进 `memory/scratchpad_hygiene.jsonl`。
 
 ### 弱模型能力层新失败模式（cycle #11，7a745930）
 
