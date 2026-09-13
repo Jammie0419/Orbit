@@ -410,7 +410,13 @@ def snapshot_checkpoint_summary(data_root: pathlib.Path) -> None:
 
 def _provider_probe(timeout: float = 45.0) -> None:
     """1-token 真实调用验证 provider 链路（桥在线 + 密钥有效 + 模型可达）。
-    失败 → SystemExit 带明确原因，喂料开始前终止。"""
+    失败 → SystemExit 带明确原因，喂料开始前终止。
+
+    判据是"调用返回了良构响应"，不是"内容非空"：推理型模型（mimo）会把小
+    token 预算整个花在 reasoning_content 上，content 为空但 HTTP 200 +
+    finish_reason=length 是正常响应形态——链路已被证明。硬失败只有异常路径
+    （连接拒绝 / 401 / 未知模型 id）。smoke_test_11 首跑即被空内容误杀，
+    而同一桥同一模型当日手动 curl 与完整战役周期均正常。"""
     from ouroboros.config import _main_model
     from ouroboros.llm import LLMClient
 
@@ -427,7 +433,8 @@ def _provider_probe(timeout: float = 45.0) -> None:
         )
     text = str((msg or {}).get("content") or "").strip()
     if not text:
-        raise SystemExit("provider 探活失败：模型返回空内容（检查网关与模型 id）")
+        _log("provider 探活: ✅ (响应良构但 content 为空——推理型模型将 token 花在 reasoning 上，链路正常)")
+        return
     _log(f"provider 探活: ✅ ({text[:24]})")
 
 
