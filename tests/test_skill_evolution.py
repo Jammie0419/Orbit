@@ -188,12 +188,14 @@ def test_stats_bump_evolution_version(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def _eligible_steps():
-    # 7 steps: an error followed by a recovery = self-repair, last step ok.
+    # 9 steps ≥ MIN_TOOL_CALLS(8, recalibrated 2026-09-05 on the 130-record
+    # corpus: n_calls P50=8): the test-local error at step 2 followed by a
+    # recovery = self-repair; outcome_hint carries the success signal.
     return [
         {"step_id": i, "tool": "Terminal", "is_error": False,
          "status": "ok", "result_preview": "ok", "args": "{}"}
-        for i in range(6)
-    ] + [{"step_id": 6, "tool": "Terminal", "is_error": True, "status": "error"}]
+        for i in range(8)
+    ] + [{"step_id": 8, "tool": "Terminal", "is_error": True, "status": "error"}]
 
 
 def test_generate_eligible_true(monkeypatch, tmp_path):
