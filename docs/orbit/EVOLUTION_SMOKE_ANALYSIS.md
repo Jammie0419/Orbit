@@ -269,3 +269,41 @@ cat <session>/data/state/step_credits.jsonl            # 步骤信用（key/drag
 3. 冒烟通过后：git 提交本轮全部 devtools/docs 改动；
 4. 真实实验 V0/V3 分批复跑（按第三部分模式，你控制五五节奏）；
 5. Terminal 评测与论文数据填充。
+---
+
+## smoke_test_fix 会话收官（2026-09-13）：首个 absorbed 达成
+
+第十轮冒烟保存原样，`bench_runs/arms/smoke_test_fix` 按进化顺序逐环节修复验证。会话以 **absorbed_cycles_done=1** 收官（历史合计 cycles=9、absorbed=1、no_op=13、成本 $0，absorbed 提交 `432237728995` = media.py + tests 共 +329/-0，零发布面触碰）。
+
+### 环节-证据映射表
+
+| # | 机制环节 | 状态 | 证据（会话内可复核） |
+|---|---|---|---|
+| 1 | 语料种子化 | ✓ | `state/seeded_tasks.json`（第十轮 10 条）；决策 prompt 正常引用 |
+| 2 | 反思 | ✓ | `logs/task_reflections.jsonl` 22 条真实反思 |
+| 3 | 记忆动作/backlog | ✓ | `memory/knowledge/` agent 自写条目（tool_registration、test_authoring 等） |
+| 4 | Track A 经验+步骤信用 | ✓ | 经验账本 28 行（14 task）；信用分配 135 条（key 74/drag 61，和=3.715）；absorbed 周期 34 步全部带信用 |
+| 5 | 决策（maybe_promote） | ✓ | cadence 计数推进；两轮请求文件被消费（含熔断后的目标切换） |
+| 6 | Track B 周期消费 | ✓ | 回放：5 行旧 schema → 游标 5 → 5 条 cycle 经验；收官：游标 5→15，13 no_op + 1 absorbed 入账 |
+| 7 | planner → evolution_plan | ✓ | 战役 JSON 携带 evolution_plan，周期任务文本可消费 |
+| 8 | 契约注入 → 请求文件 | ✓ | 契约 v2（冻结面禁令+五步）在 objective 内；agent 全程只改 media.py/tests |
+| 9 | supervisor 消费（apply_pending_request） | ✓ | owner_chat_id 闸门修复后消费成功 ×3；one-shot autostop 按设计复关 |
+| 10 | 战役派发+执行 | ✓ | 15 战，执行 ok（degraded 仅早期 2 战） |
+| 11 | plan_task（scope 评审前哨） | ✓ | 早期轮次 plan review 通过；收官目标按 `requires_plan_review=False` 精简 |
+| 12 | commit_reviewed 正门 | ✓ | e7ab9a6a：enable_tools → advisory 预评审 → **commit OK**；动态必需集（b347d06b）让 scope pack 首次可组装（scope_review_review 调用 3 次） |
+| 13 | request_restart → absorbed | ✓ | commit `432237728995` 落库 → 重启 → boot reconcile `restart_verified=True → absorbed`（agent_startup_checks.py:806）；重复计数按设计仅 absorb 清零 |
+| 14 | finalize 补消费 → 账本 | ✓ | `consume_pending_cycles` 两轮补消费 9 行；`waiting_for_restart` 中间态行按设计跳过 |
+
+### 本会话新增修复（已入库）
+
+- `b347d06b` 动态必需集：冻结工件仅在 diff 相邻（touched/被提名/注册工具）时 required，其余 manifest-only；`OUROBOROS_SCOPE_DYNAMIC_REQUIRED=0` 可回退静态包。323 个相关测试全绿（atlas 20 + scope 150 + commit 链路 153）。修复 fixture 残留 9 行旧尸体代码（曾把 staged diff 顶掉导致误判）。
+
+### 运营层事故与教训（非代码缺陷）
+
+1. **隔离 server 需要显式 env**：provider 凭据走 env 白名单透传（server_runner.py:96），新 shell 未 source `.env` 时启动即 "No supported provider"。触发脚本应自带 `.env` 加载（后续可加，非阻塞）。
+2. **隔离重启需外部驱动**：`waiting_for_restart` 由 boot reconcile 收敛，trigger 脚本未实现重启步——手动重启 server 后立即吸收。runner 正常路径不受影响。
+3. **objective 重复熔断（3/3）**：同一 objective 连续 no_op 三次后战役自动暂停——这是 BUG3 防自维护回路的正确行为，换目标即恢复。
+
+### 弱模型能力层新失败模式（cycle #11，7a745930）
+
+模型在 schema 含 `commit_reviewed`（40 工具，03:10:44 起每轮均在）的情况下从未发出该函数调用：试图 CLI 子进程/import/shell commit，被栅栏拦后自我说服"工具不可调用"（progress 消息为证），最终以"基础设施不可达"收尾上报 owner。**ground truth 来自 observability payload 时间线：harness 无罪。** 触发因素之一是共享 scratchpad 被错误信念污染（"not callable" + 旧墙叙事 + "勿重试"），已做 owner 记忆手术（保留真实事实、标注 ibl 已修复）后换新目标一次通过。827K 字符系统提示下的工具注意力稀释是候选根因，值得在论文能力层分析中记录。
