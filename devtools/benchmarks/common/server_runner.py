@@ -257,6 +257,9 @@ class IsolatedServer:
         self.host_service_port = free_port()
         self.base_url = f"http://{host}:{self.port}"
         self.proc: subprocess.Popen | None = None
+        # Restart-driver state: the last bounce signal (marker mtime + campaign
+        # updated_at) this instance already performed a bounce for.
+        self._last_restart_signal: str = ""
         # Filled by _wait_ready: the HTTP runtime_version + the clone's HEAD/VERSION that
         # produced it, so a driver can record WHICH agent identity its numbers came from.
         self.attestation: dict = {}
@@ -391,6 +394,52 @@ class IsolatedServer:
             time.sleep(2)
         return False
 
+    def maybe_bounce_for_restart(self) -> bool:
+        """Isolated-benchmark restart driver: bounce the server ONCE per restart signal.
+
+        The supervisor stages ``state/pending_restart_verify.json`` and queues a
+        ``restart_request`` event, but EVENT_HANDLERS has no consumer for that event —
+        the product re-execs via its EXTERNAL launcher. An isolated run has no launcher,
+        so the cycle would sit in ``waiting_for_restart`` forever (smoke_test_fix
+        2026-09-13: absorption only happened after a manual stop/start). Bouncing here
+        re-enters the documented pipeline: boot reconciliation reads the marker,
+        verifies exact commit authority, and absorbs the cycle.
+
+        Returns True when a bounce was performed. Idempotent per signal (keyed on the
+        marker's mtime + campaign updated_at), and refuses while the queue is busy."""
+        marker = self.data_root / "state" / "pending_restart_verify.json"
+        tx_outcome = ""
+        camp_updated = ""
+        camp_path = self.data_root / "state" / "evolution_campaign.json"
+        try:
+            camp = json.loads(camp_path.read_text(encoding="utf-8-sig"))
+            tx = camp.get("active_transaction") or {}
+            tx_outcome = str(tx.get("cycle_outcome") or "")
+            camp_updated = str(camp.get("updated_at") or "")
+        except (OSError, json.JSONDecodeError):
+            camp = {}
+        if not marker.exists() and tx_outcome != "waiting_for_restart":
+            return False
+        signal_key = f"{marker.stat().st_mtime_ns if marker.exists() else 0}:{camp_updated}"
+        if self._last_restart_signal == signal_key:
+            return False
+        try:
+            st = self._state(timeout=5)
+            idle = (int(st.get("pending_count") or 0) == 0
+                    and int(st.get("running_count") or 0) == 0)
+        except (urllib.error.URLError, OSError, ValueError):
+            idle = False
+        if not idle:
+            return False
+        print(f"[isolated-server] restart signal staged (marker={marker.exists()} "
+              f"tx_outcome={tx_outcome or '-'}) — bouncing server so boot "
+              f"reconciliation can absorb the cycle", flush=True)
+        self.stop()
+        time.sleep(3)
+        self.start(ready_timeout=240)
+        self._last_restart_signal = signal_key
+        return True
+
     def wait_for_absorb(self, prev_sha: str, prev_absorbed: int, timeout: float = 1800,
                         idle_grace: float = 90) -> dict:
         """Between instances, wait for an absorbed self-evolution cycle: the server
@@ -408,6 +457,13 @@ class IsolatedServer:
             if cycles > prev_absorbed and sha and sha != prev_sha:
                 self.wait_for_health(timeout=180)
                 return {"absorbed": True, "new_sha": sha, "cycles": cycles, "reason": "absorbed"}
+            # No external launcher in an isolated run: THIS driver performs the restart
+            # the restart_request event asks for (checked before the idle exit below —
+            # a staged marker must never be mistaken for "nothing happening").
+            try:
+                self.maybe_bounce_for_restart()
+            except Exception:  # noqa: BLE001 - a bounce failure must not kill the wait
+                pass
             if time.time() - start > idle_grace and cycles == prev_absorbed:
                 try:
                     st = self._state(timeout=5)
