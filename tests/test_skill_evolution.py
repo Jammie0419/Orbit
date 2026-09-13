@@ -1183,3 +1183,16 @@ def test_evolver_record_carries_fitness_discount(monkeypatch, tmp_path):
     # 0.5 mean < baseline 0.5833 -> reject, discount recorded as 1.0 (no accepts yet)
     assert records[0]["accepted"] is False
     assert records[0]["fitness_discount"] == 1.0
+
+def test_eligibility_reason_explains_each_gate(tmp_path):
+    """The [技能] log line shows WHY a task was in/eligible — same predicates as
+    is_eligible, one source of truth."""
+    gen = ag.SkillAutoGenerator(_drive(tmp_path))
+    steps = _eligible_steps()
+    steps[2] = {"step_id": 2, "tool": "Edit", "is_error": True, "status": "error"}
+    assert gen.is_eligible(steps, outcome_hint="success") is True
+    assert ag.eligibility_reason(steps, outcome_hint="success") == "ok"
+    assert ag.eligibility_reason(steps[:4], outcome_hint="success") == "calls 4<8"
+    assert ag.eligibility_reason(steps, outcome_hint="failure") == "task_failed"
+    flat = [dict(s, is_error=False) for s in steps]
+    assert ag.eligibility_reason(flat, outcome_hint="success") == "no_self_repair"

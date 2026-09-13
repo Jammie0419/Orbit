@@ -327,3 +327,21 @@ def test_recurrence_reopens_done_item(tmp_path):
     reopened = load_backlog_items(tmp_path)[0]
     assert reopened["status"] == "open"
     assert int(reopened["count"]) == 2
+
+
+def test_append_detailed_returns_touched_entries(tmp_path):
+    """The benchmark driver's [backlog] log line needs the touched entries — new
+    items AND recurrence bumps — with their persisted ids/counts."""
+    from ouroboros.improvement_backlog import append_backlog_items_detailed
+
+    added, touched = append_backlog_items_detailed(tmp_path, [
+        {"summary": "s1", "category": "c", "source": "s", "evidence": "e", "id": "ibl-1"},
+    ])
+    assert added == 1 and len(touched) == 1
+    assert touched[0]["id"] == "ibl-1" and touched[0]["count"] == "1"
+    added, touched = append_backlog_items_detailed(tmp_path, [
+        {"summary": "s1", "category": "c", "source": "s", "evidence": "e", "id": "ibl-1"},
+    ])
+    assert added == 1 and touched[0]["count"] == "2"  # recurrence bump, same id
+    added, touched = append_backlog_items_detailed(tmp_path, [])
+    assert added == 0 and touched == []

@@ -32,6 +32,9 @@ from ouroboros.evolution_fingerprint import _PLAN_REVIEW_SUFFIX
 log = logging.getLogger(__name__)
 
 _REQUEST_REL = "state/post_task_evolution_request.json"
+# Last decision outcome, for observers (benchmark driver's [决策] log line) that
+# need the deny/promote REASON without breaking maybe_promote's None contract.
+_LAST_DECISION_TRACE: Dict[str, Any] = {}
 _COUNTER_REL = "state/post_task_evolution_counter.json"
 _SKIP_TYPES = frozenset({"evolution", "deep_self_review"})
 
@@ -159,7 +162,7 @@ _DECISION_PROMPT = """You decide whether Ouroboros should run ONE reviewed self-
 {experience_digest}
 
 Return ONLY a JSON object:
-{{"promote": true|false, "objective": "<one concrete, self-contained improvement to Ouroboros's own code/process; empty if not promoting>", "requires_plan_review": true|false, "backlog_id": "<id if this maps to a backlog item, else empty>"}}
+{{"promote": true|false, "objective": "<one concrete, self-contained improvement to Ouroboros's own code/process; empty if not promoting>", "requires_plan_review": true|false, "backlog_id": "<id if this maps to a backlog item, else empty>", "reason": "<one sentence: why promote or why not>"}}
 
 Rules: set promote=true ONLY when there is a concrete, high-value, self-contained code/process improvement worth a reviewed cycle right now. Prefer items already in the backlog, and weigh the solve-capability history: objective classes that historically got ABSORBED are better bets than classes that kept ending no_op/abandoned. Bias toward SMALL, TARGETED objectives that directly improve the ability to solve tasks (a sharper tool, a fixed failure mode, a removed bottleneck) over broad refactors or speculative platform work — small reviewed wins absorb; sprawling objectives historically die as no_op. Do NOT propose anything in the CLOSED / DROPPED list, or a restatement of the ACTIVE CAMPAIGN OBJECTIVE — those are already handled; if the only candidates are closed/active, return promote=false. If nothing is clearly worthwhile, return promote=false. {force_note}"""
 
@@ -311,6 +314,9 @@ def _decide_promotion(env: Any, task: Dict[str, Any], reflection_entry: Optional
             # Default to requiring plan review (preserve the advisory->reviewed boundary).
             "requires_plan_review": bool(obj.get("requires_plan_review", True)),
             "backlog_id": str(obj.get("backlog_id") or "").strip(),
+            # One-sentence justification for the benchmark log's [决策] line; the
+            # decision logic never reads it. Tolerates models that omit the field.
+            "reason": str(obj.get("reason") or "").strip(),
         }
     except Exception:
         log.debug("post_task_evolution: decision LLM call failed", exc_info=True)
@@ -443,6 +449,14 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         decision = _decide_promotion(env, task, reflection_entry, llm_client, force=force,
                                      strategy_digest=strategy_digest)
         if not decision or not decision.get("promote") or not decision.get("objective"):
+            # The benchmark driver logs the deny reason from this trace (maybe_promote's
+            # None contract is unchanged for product callers).
+            _LAST_DECISION_TRACE.update({
+                "promote": False,
+                "objective": str((decision or {}).get("objective") or ""),
+                "reason": str((decision or {}).get("reason") or "")
+                or ("decision_failed" if not decision else "no_objective"),
+            })
             return None
         # Planner: attach the structured evolution plan to the request when the
         # layer is on. A failed plan degrades to None — the cycle still runs on
@@ -462,6 +476,12 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
             log.debug("post_task_evolution: evolution planner failed", exc_info=True)
             evolution_plan = None
         _write_request(drive_root, decision, task, evolution_plan=evolution_plan)
+        _LAST_DECISION_TRACE.update({
+            "promote": True,
+            "objective": str(decision.get("objective") or ""),
+            "backlog_id": str(decision.get("backlog_id") or ""),
+            "reason": str(decision.get("reason") or ""),
+        })
         log.info("post_task_evolution: durable promotion signal written (origin task=%s%s)",
                  str(task.get("id") or ""),
                  " with evolution_plan" if evolution_plan else "")

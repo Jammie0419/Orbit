@@ -267,9 +267,19 @@ def append_backlog_items(drive_root: Any, items: List[Dict[str, Any]]) -> int:
     NOT dropped — its ``count`` and ``last_seen`` are bumped in place (and a
     previously-closed item re-opens). Priority/kind (B/D) are persisted. A reworded
     restatement that misses the exact fingerprint is caught by the semantic dedup
-    pre-pass (C9.2) and folded into the item it duplicates."""
+    pre-pass (C9.2) and folded into the item it duplicates. Returns the number of
+    touched items (new + bumped)."""
+    added, _touched = append_backlog_items_detailed(drive_root, items)
+    return added
+
+
+def append_backlog_items_detailed(drive_root: Any, items: List[Dict[str, Any]]) -> tuple:
+    """Same as :func:`append_backlog_items`, but also returns the touched entries —
+    ``(changed_count, [entry dicts with id/fingerprint/summary/count/status/priority/
+    last_seen])`` — so the benchmark driver can log WHICH objectives a record's
+    friction produced (new items and recurrence bumps alike)."""
     if not items:
-        return 0
+        return 0, []
 
     path = ensure_backlog_file(drive_root)
     items = _semantic_redirect_fingerprints(drive_root, path, items)
@@ -290,6 +300,7 @@ def append_backlog_items(drive_root: Any, items: List[Dict[str, Any]]) -> int:
                 fp_to_key[fp] = key
         now = utc_now_iso()
         changed = 0
+        touched: List[Dict[str, Any]] = []
 
         for item in items:
             summary = _sanitize(item.get("summary", ""), 260)
@@ -308,6 +319,7 @@ def append_backlog_items(drive_root: Any, items: List[Dict[str, Any]]) -> int:
                     ex.pop("closed_at", None)
                 ex.pop("_raw", None)  # modified -> re-serialize canonically
                 changed += 1
+                touched.append(dict(ex))
                 continue
             created = _sanitize(item.get("created_at", now), 40)
             entry = {
@@ -332,9 +344,10 @@ def append_backlog_items(drive_root: Any, items: List[Dict[str, Any]]) -> int:
             order.append(fingerprint)
             fp_to_key[fingerprint] = fingerprint
             changed += 1
+            touched.append(dict(entry))
 
         if not changed:
-            return 0
+            return 0, []
 
         new_text = _serialize_backlog([by_key[k] for k in order])
         fh.seek(0)
@@ -343,7 +356,7 @@ def append_backlog_items(drive_root: Any, items: List[Dict[str, Any]]) -> int:
         fh.flush()
 
     _rebuild_index(path)
-    return changed
+    return changed, touched
 
 
 def merge_backlog_text(drive_root: Any, text: str) -> int:

@@ -65,6 +65,28 @@ def task_succeeded(outcome_hint: str, steps: List[Dict[str, Any]]) -> bool:
     return bool(steps) and not bool(steps[-1].get("is_error"))
 
 
+def eligibility_reason(steps: List[Dict[str, Any]], outcome_hint: str = "") -> str:
+    """The generation gate as an explainable string — "ok" or WHY not.
+
+    Single source of truth for ``SkillAutoGenerator.is_eligible`` and for the
+    benchmark driver's [技能] 资格 log line, so the two can never drift.
+    Returns one of: "ok" | "calls N<MIN" | "task_failed" | "no_self_repair"
+    ("not a list" folds into the calls gate)."""
+    if not isinstance(steps, list) or len(steps) < MIN_TOOL_CALLS:
+        n = len(steps) if isinstance(steps, list) else 0
+        return f"calls {n}<{MIN_TOOL_CALLS}"
+    if not task_succeeded(outcome_hint, steps):
+        return "task_failed"
+    if not any(
+        bool(steps[i].get("is_error"))
+        and i + 1 < len(steps)
+        and not bool(steps[i + 1].get("is_error"))
+        for i in range(len(steps) - 1)
+    ):
+        return "no_self_repair"
+    return "ok"
+
+
 def recent_review_flags(
     drive_root: pathlib.Path,
     skill_name: str = "",
@@ -247,16 +269,7 @@ class SkillAutoGenerator:
 
     def is_eligible(self, steps: List[Dict[str, Any]], outcome_hint: str = "") -> bool:
         """Paper trigger: >5 tool calls, at least one self-repair, task success."""
-        if not isinstance(steps, list) or len(steps) < MIN_TOOL_CALLS:
-            return False
-        if not task_succeeded(outcome_hint, steps):
-            return False
-        return any(
-            bool(steps[i].get("is_error"))
-            and i + 1 < len(steps)
-            and not bool(steps[i + 1].get("is_error"))
-            for i in range(len(steps) - 1)
-        )
+        return eligibility_reason(steps, outcome_hint=outcome_hint) == "ok"
 
     def already_generated_for_task(self, task_id: str) -> bool:
         """History guard: this task already produced a skill (or failed)."""

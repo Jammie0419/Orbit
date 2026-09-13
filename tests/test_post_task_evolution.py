@@ -688,3 +688,59 @@ def test_promotion_chooser_uses_main_model_slot(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_MODEL", "")
     pte._decide_promotion(env, {"id": "t2"}, {"reflection": "r"}, object(), force=False)
     assert calls.get("model") == config.SETTINGS_DEFAULTS["OUROBOROS_MODEL"]
+
+
+def test_decision_parse_surfaces_reason_field(monkeypatch, tmp_path):
+    """The [决策] log line needs the WHY. The prompt requests a reason field; the
+    parse surfaces it and tolerates models that omit it."""
+    import types as _types
+
+    class _FakeLLM:
+        def __init__(self, content):
+            self._content = content
+
+        def chat(self, messages, **kwargs):
+            return {"content": self._content}, {}
+
+    monkeypatch.setenv("OUROBOROS_POST_TASK_EVOLUTION", "true")
+    env = _types.SimpleNamespace(drive_root=tmp_path)
+    task = {"type": "task", "id": "t1"}
+
+    d = pte._decide_promotion(env, task, {"reflection": "x"}, _FakeLLM(
+        '{"promote": true, "objective": "Add X", "requires_plan_review": false,'
+        ' "backlog_id": "", "reason": "high-frequency friction"}'), force=True)
+    assert d["promote"] is True and d["reason"] == "high-frequency friction"
+
+    d = pte._decide_promotion(env, task, {"reflection": "x"}, _FakeLLM(
+        '{"promote": false, "objective": "", "reason": "nothing worthwhile"}'), force=True)
+    assert d["promote"] is False and d["reason"] == "nothing worthwhile"
+
+    d = pte._decide_promotion(env, task, {"reflection": "x"}, _FakeLLM(
+        '{"promote": true, "objective": "Add X"}'), force=True)
+    assert d["reason"] == ""  # omission tolerated
+
+
+def test_maybe_promote_deny_reason_reaches_trace(tmp_path, monkeypatch):
+    """Deny path (LLM said promote=false): maybe_promote still returns None, but
+    the module trace exposes the reason for the benchmark driver's log line."""
+    import types as _types
+
+    import ouroboros.project_facts as pf
+
+    monkeypatch.setenv("OUROBOROS_POST_TASK_EVOLUTION", "true")
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "pro")
+    monkeypatch.setenv("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", "every_n:5")
+    monkeypatch.setattr(pte, "_eligible", lambda t: True)
+    monkeypatch.setattr(pte, "_is_canonical_run", lambda e, t: True)
+    monkeypatch.setattr(pf, "resolve_project_id", lambda t: None)
+    monkeypatch.setattr(pte, "_decide_promotion", lambda *a, **k: {
+        "promote": False, "objective": "", "requires_plan_review": True,
+        "backlog_id": "", "reason": "nothing worthwhile"})
+
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    # counter n=4 → this call advances to 5 → 5%5==0 → due (promotion gates pass)
+    (tmp_path / "state" / "post_task_evolution_counter.json").write_text(json.dumps({"n": 4}))
+    env = _types.SimpleNamespace(drive_root=tmp_path)
+    assert pte.maybe_promote(env, {"type": "task", "id": "t1"}, {"reflection": "x"}) is None
+    assert pte._LAST_DECISION_TRACE["promote"] is False
+    assert pte._LAST_DECISION_TRACE["reason"] == "nothing worthwhile"
