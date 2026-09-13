@@ -408,28 +408,41 @@ def snapshot_checkpoint_summary(data_root: pathlib.Path) -> None:
             _log(f"  absorbed {r.get('commit_sha', '')[:12]} | {str(r.get('campaign_objective') or '')[:60]}")
 
 
-def _provider_probe(timeout: float = 45.0) -> None:
+def _provider_probe(timeout: float = 120.0) -> None:
     """1-token 真实调用验证 provider 链路（桥在线 + 密钥有效 + 模型可达）。
     失败 → SystemExit 带明确原因，喂料开始前终止。
 
     判据是"调用返回了良构响应"，不是"内容非空"：推理型模型（mimo）会把小
     token 预算整个花在 reasoning_content 上，content 为空但 HTTP 200 +
     finish_reason=length 是正常响应形态——链路已被证明。硬失败只有异常路径
-    （连接拒绝 / 401 / 未知模型 id）。smoke_test_11 首跑即被空内容误杀，
-    而同一桥同一模型当日手动 curl 与完整战役周期均正常。"""
+    （连接拒绝 / 401 / 未知模型 id）。
+
+    超时 120s + 一次重试：cmdgo 桥的上游延迟波动很大（实测同一调用 13ms 的
+    /models 与 50s 的 chat 并存），45s 会把"慢链路"误杀成"死链路"——探活
+    的职责是拦死链路，不是测延迟。"""
     from ouroboros.config import _main_model
     from ouroboros.llm import LLMClient
 
     client = LLMClient()
-    try:
-        msg, _u = client.chat(
-            [{"role": "user", "content": "Reply with exactly: OK"}],
-            model=_main_model(), max_tokens=8, timeout=timeout,
-        )
-    except Exception as exc:
+    last_exc: Exception | None = None
+    msg: dict | None = None
+    for attempt in (1, 2):
+        try:
+            msg, _u = client.chat(
+                [{"role": "user", "content": "Reply with exactly: OK"}],
+                model=_main_model(), max_tokens=8, timeout=timeout,
+            )
+            last_exc = None
+            break
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last_exc = exc
+            if attempt == 1:
+                _log(f"provider 探活第 1 次失败（{exc}）——3s 后重试")
+                time.sleep(3)
+    if last_exc is not None or msg is None:
         raise SystemExit(
             f"provider 探活失败——模型链路不可用，中止喂料。"
-            f"检查 OPENAI_COMPATIBLE_BASE_URL/KEY 与模型网关后重试。原因: {exc}"
+            f"检查 OPENAI_COMPATIBLE_BASE_URL/KEY 与模型网关后重试。原因: {last_exc}"
         )
     text = str((msg or {}).get("content") or "").strip()
     if not text:
