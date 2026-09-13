@@ -1834,16 +1834,26 @@ def _check_evolution_commit_stage(
     if authority.get("ok"):
         return claim, ""
     reason = authority.get("reason") or "unknown"
+    # The already-committed case means the cycle's reviewed commit LANDED — the
+    # agent is re-attempting after success. Say so explicitly: round-12 cycles
+    # burned extra rounds re-committing because the bare reason gave no "stop"
+    # signal (the misleading restart-gate message compounded it).
+    stop_guidance = (
+        " The cycle is COMPLETE: the reviewed commit already landed for this"
+        " transaction. Do NOT attempt further commits — call request_restart."
+        if "already_committed" in reason else ""
+    )
     if phase == "pre_review_authority":
         message = (
             "⚠️ EVOLUTION_AUTHORITY_REVOKED: the exact campaign/transaction/task "
             f"claim is no longer active ({reason}). No reviewer was called and no "
-            "commit was created."
+            f"commit was created.{stop_guidance}"
         )
     elif phase == "pre_commit_authority":
         message = (
             "⚠️ EVOLUTION_AUTHORITY_REVOKED: review completed, but the exact "
-            f"campaign claim disappeared before commit ({reason}). Nothing was committed."
+            f"campaign claim disappeared before commit ({reason}). Nothing was "
+            f"committed.{stop_guidance}"
         )
     else:
         message = (

@@ -602,9 +602,20 @@ def _evolution_restart_block_reason(ctx: ToolContext) -> str:
         )
     if not reviewed_sha:
         return "commit_reviewed has not recorded an exact local commit receipt"
-    if reviewed_sha and reviewed_sha != head:
+    if reviewed_sha != head:
         return "HEAD changed after the last reviewed local commit"
-    return "commit_reviewed must create a local reviewed commit before evolution restart"
+    # reviewed_sha == HEAD here, so the reviewed commit EXISTS — the blocker is
+    # leftover worktree content that commit_reviewed's attribution subset did
+    # not consume. Name the real cause and the remedy: the old fall-through
+    # claimed a missing commit and sent the agent into doomed re-commit
+    # attempts (smoke_test_12: 2-4 wasted rounds in EVERY cycle).
+    dirty = [ln.strip() for ln in status.splitlines() if ln.strip()][:6]
+    return (
+        "the reviewed commit is at HEAD; the worktree still holds staged or "
+        f"modified leftovers outside the committed set ({'; '.join(dirty)}) — "
+        "unstage or discard them (git restore --staged <path>), then call "
+        "request_restart again"
+    )
 
 
 def _request_restart(ctx: ToolContext, reason: str) -> str:
