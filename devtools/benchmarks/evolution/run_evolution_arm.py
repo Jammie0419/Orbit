@@ -1122,6 +1122,11 @@ def main() -> int:
     # 在第一道门就短路，promote 决策与技能进化块整场不执行。外部显式环境变量优先。
     os.environ.setdefault("OUROBOROS_POST_TASK_EVOLUTION", "true")
     os.environ.setdefault("OUROBOROS_RUNTIME_MODE", "pro")
+    # --cadence 也必须注入：maybe_promote 的 getter 只读环境变量，缺失时回退默认
+    # "llm"（每条语料由决策 LLM 自由决定是否晋升）——--cadence every_n:N 会被
+    # 静默忽略，计数器文件根本不会建立。smoke_test_12 因此跑成了每条语料一次
+    # 战役；真跑时治疗剂量将完全失控。
+    os.environ.setdefault("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", args.cadence)
     for _env_key, _env_val in ARM_SWITCHES.get(args.arm.upper(), {}).items():
         os.environ.setdefault(_env_key, _env_val)
     # 旁模型一致性：ouroboros 的模型 getter 只读环境变量（缺失回退默认 grok-4.5），
