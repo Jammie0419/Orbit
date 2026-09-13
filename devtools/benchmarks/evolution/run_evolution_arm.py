@@ -514,6 +514,54 @@ def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) ->
 # session setup
 # ---------------------------------------------------------------------------
 
+def _seed_owner_ack(data_root: pathlib.Path, settings_path: pathlib.Path) -> None:
+    """Seed the owner-asserted context-window ack for the session's review route.
+
+    The ack is SESSION-LOCAL state (capability_evidence.json lives in the data
+    root): smoke_test_fix recorded it manually and absorbed on cycle 12, but
+    smoke_test_11's fresh data dir had none — reviewer window unknown →
+    conservative 200K → scope input budget 90909 — while the irreducible scope
+    prompt (ARCHITECTURE.md alone is ~117K tokens; canonical docs + checklist +
+    diff ≈ 216K) can NEVER fit, so every cycle no-ops regardless of agent
+    behavior (round 11: 7/7 no_op, 15 commit_reviewed attempts all blocked).
+    Gated on an explicit owner assertion (OUROBOROS_OWNER_WINDOW_TOKENS);
+    without it the fail-closed unknown-window behavior is unchanged. The route
+    fields mirror the working manual ack (provider / base_url / prefixed model
+    string) so the fingerprint matches the server's review-time lookup."""
+    window = int(os.environ.get("OUROBOROS_OWNER_WINDOW_TOKENS") or 0)
+    if window <= 0:
+        return
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+    model = ""
+    for key in ("OUROBOROS_SCOPE_REVIEW_MODELS", "OUROBOROS_REVIEW_MODELS", "OUROBOROS_MODEL"):
+        raw = str(settings.get(key) or os.environ.get(key) or "").strip()
+        if raw:
+            model = raw.split(",")[0].strip()
+            break
+    if not model:
+        _log("owner-ack: 未播种——找不到模型槽位（OUROBOROS_MODEL 等）")
+        return
+    provider = model.split("::", 1)[0] if "::" in model else "openai-compatible"
+    base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL")
+                   or settings.get("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
+    if provider == "openai-compatible" and not base_url:
+        _log("owner-ack: 未播种——openai-compatible 路由缺 OPENAI_COMPATIBLE_BASE_URL")
+        return
+    try:
+        from ouroboros import capability_evidence as _ce
+        rec = _ce.record_owner_ack(
+            data_root, provider=provider, base_url=base_url, model=model,
+            window_tokens=window, owner="experiment-operator",
+            note="runner-seeded from OUROBOROS_OWNER_WINDOW_TOKENS at session creation",
+        )
+        _log(f"owner-ack: 已播种 {model} window={window} (fp={rec['route_fp']})")
+    except Exception as exc:  # noqa: BLE001 - ack seeding must not kill session setup
+        _log(f"owner-ack 播种失败（按无 ack 继续）: {exc}")
+
+
 def _seed_settings(data_root: pathlib.Path, arm: str, cadence: str, total_budget: float,
                    live_settings: pathlib.Path) -> pathlib.Path:
     settings_path = data_root / "settings.json"
@@ -1037,6 +1085,7 @@ def main() -> int:
         data_root.mkdir(parents=True, exist_ok=True)
         settings_path = _seed_settings(data_root, args.arm, args.cadence, args.budget, args.live_settings)
         seed_owner_state(data_root)
+        _seed_owner_ack(data_root, pathlib.Path(settings_path))
 
         from supervisor import state as sstate
         (data_root / sstate.ISOLATED_BENCHMARK_SENTINEL).write_text("isolated benchmark data root\n", encoding="utf-8")
@@ -1226,10 +1275,10 @@ def main() -> int:
     }
     (session_dir / "session_ledger.json").write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
-    if _LOG_FH is not None:
-        _LOG_FH.close()
     _log(f"ledger: {session_dir / 'session_ledger.json'}")
     _log(f"吸收 commit（{args.arm}-evolved tag 相对起点）: {commits.strip() or '(无)'}")
+    if _LOG_FH is not None:
+        _LOG_FH.close()
     return 0
 
 
