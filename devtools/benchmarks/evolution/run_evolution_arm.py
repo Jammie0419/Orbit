@@ -1094,6 +1094,25 @@ def main() -> int:
         if not (clone / ".git").is_dir() or not settings_path.is_file():
             _log("resume 目录不完整: 缺 clone/.git 或 data/settings.json")
             return 2
+        # Resume must re-apply runtime-tunable args: settings.json is the boot-time
+        # authority (apply_settings_to_env clobbers env at server start), so a CLI
+        # cadence/budget change without rewriting the file would be silently ignored
+        # — e.g. a two-phase run (screening with --cadence off, then --resume with
+        # every_n:N) would keep promotion disabled forever.
+        try:
+            st = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+            changed = {}
+            if str(st.get("OUROBOROS_POST_TASK_EVOLUTION_CADENCE")) != str(args.cadence):
+                st["OUROBOROS_POST_TASK_EVOLUTION_CADENCE"] = args.cadence
+                changed["cadence"] = args.cadence
+            if abs(float(st.get("TOTAL_BUDGET") or 0) - float(args.budget)) > 1e-9:
+                st["TOTAL_BUDGET"] = args.budget
+                changed["budget"] = args.budget
+            if changed:
+                settings_path.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+                _log(f"resume: settings.json 已同步 {changed}（settings 是启动时的 env 权威）")
+        except Exception as exc:  # noqa: BLE001 - sync failure must not kill resume
+            _log(f"resume: settings.json 同步失败（按原值继续）: {exc}")
         sha_start = progress.get("sha_start") or _git(["rev-parse", "HEAD"], clone)[1].strip()
     progress_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2), encoding="utf-8")
     os.environ["OUROBOROS_DATA_DIR"] = str(data_root)
