@@ -1415,6 +1415,16 @@ def main() -> int:
                         _log(f"[技能]    资格: {'✅' if _elig == 'ok' else '—'} ({_elig})")
                     except Exception:  # noqa: BLE001 - eligibility display is best-effort
                         pass
+                    # 记录当前账本规模（在 maybe_promote 之前），用于 diff 本条贡献
+                    _exp_before_count = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
+                    try:
+                        _bl_rows_before_count = _count_lines(data_root / "memory" / "knowledge" / "improvement-backlog.jsonl")
+                    except OSError:
+                        _bl_rows_before_count = 0
+                    try:
+                        _skill_rows_before_count = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
+                    except OSError:
+                        _skill_rows_before_count = 0
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
                     if decision:
                         _augment_request_contract(data_root)  # 战役执行契约注入 objective
@@ -1463,36 +1473,44 @@ def main() -> int:
                             _log(f"[决策]    {_skip} → 跳过晋升")
                         else:
                             _log(f"[决策]    LLM: 不晋升 理由: {_head(_trace.get('reason'), 90) or '—'}")
-                    # [Track-A] diff 经验账本——extract_task_experience 在 maybe_promote 内
-                    # 已写入新行（本地计算，无 LLM），这里只输出摘要。
+                    # [积累] 汇总：本条贡献 + 账本累计（在 maybe_promote 之后 diff）
+                    _exp_total_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
+                    _bl_total_after = _count_lines(data_root / "memory" / "knowledge" / "improvement-backlog.jsonl")
+                    _skill_total_after = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
+                    _n_new_exp = _exp_total_after - _exp_before_count
+                    _n_new_bl = _bl_total_after - _bl_rows_before_count
+                    _n_new_skill = _skill_total_after - _skill_rows_before_count
+                    if _n_new_exp or _n_new_bl or _n_new_skill:
+                        _parts = []
+                        if _n_new_exp:
+                            _parts.append(f"+{_n_new_exp} 经验")
+                        if _n_new_bl:
+                            _parts.append(f"+{_n_new_bl} backlog")
+                        if _n_new_skill:
+                            _parts.append(f"+{_n_new_skill} 技能")
+                        _log(f"[积累]   record {i:2d}: {' | '.join(_parts)} | "
+                             f"账本累计 经验={_exp_total_after} backlog={_bl_total_after} 技能={_skill_total_after}")
+                    # [Track-A] 本条贡献的 task 经验摘要
                     try:
-                        _exp_before = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "task"}
-                        _exp_after = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "task"}
-                        _new_task_ids = set(_exp_after.keys()) - set(_exp_before.keys())
-                        if _new_task_ids:
-                            for tid in list(_new_task_ids)[:2]:
-                                s = _experience_summary(_exp_after[tid])
-                                _log(f"[Track-A] {s}")
+                        _exp_all = [json.loads(l) for l in (
+                            data_root / "state" / "evolution_experiences.jsonl"
+                        ).read_text(encoding="utf-8-sig").splitlines() if l.strip()]
+                        _new_task_exp = next((e for e in _exp_all
+                                              if e.get("task_id") == rec["id"] and e.get("kind") == "task"), None)
+                        if _new_task_exp:
+                            _log(f"[Track-A] {_experience_summary(_new_task_exp)}")
                     except Exception:  # noqa: BLE001 - display only
                         pass
-                    # [Track-B] diff cycle 经验行——consume_pending_cycles 在 maybe_promote 内
-                    # 也写入新行（可能带 LLM 调用），finalize 时再补一次。
+                    # [Track-B] 本条消费到的 cycle 经验摘要（如有，通常是 finalize 补消费）
                     try:
-                        _cy_before = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
-                        _cy_after = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
-                        _new_cycle_ids = set(_cy_after.keys()) - set(_cy_before.keys())
-                        if _new_cycle_ids:
-                            for cid in list(_new_cycle_ids)[:2]:
-                                s = _experience_summary(_cy_after[cid])
-                                _log(f"[Track-B] {s}")
+                        _cy_exps = [e for e in _exp_all if e.get("kind") == "cycle"]
+                        for _e in reversed(_cy_exps):
+                            if _e.get("task_id") and not any(
+                                r.get("task_id") == _e.get("task_id")
+                                for r in _exp_all[:_exp_all.index(_e)]
+                            ):
+                                _log(f"[Track-B] {_experience_summary(_e)}")
+                                break
                     except Exception:  # noqa: BLE001 - display only
                         pass
                     _log(f"[记录 {i:2d}/{len(corpus)}] {rec['id']}: 反思{len(str(reflection_entry.get('reflection', '')))}字 "
