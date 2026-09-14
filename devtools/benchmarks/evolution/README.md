@@ -45,6 +45,44 @@ python -m devtools.benchmarks.evolution.run_evolution_arm \
 #    bench_runs/evolution/V0/clone/                   ← 会话后代码（含吸收 commit，tag: V0-evolved）
 ```
 
+## 分批运行与 API 限流处理
+
+如果你的 API 有速率限制或需要分批运行，使用 `--max-absorbed` 参数控制每批的战役数量：
+
+```bash
+# 批次 1：跑 10 个战役后自动停止（约 50 条语料）
+python -m devtools.benchmarks.evolution.run_evolution_arm \
+    --corpus bench_runs/evolution_corpus/gaia_corpus_2026-09-04.jsonl \
+    --arm V3 --session-dir /home/lzm/bench_runs/arms/real_run \
+    --cadence every_n:5 --max-absorbed 10
+
+# 休息一会，让 API 恢复（5-10 分钟）
+
+# 批次 2：resume 继续，再跑 10 个战役（总计 20 个）
+python -m devtools.benchmarks.evolution.run_evolution_arm \
+    --corpus bench_runs/evolution_corpus/gaia_corpus_2026-09-04.jsonl \
+    --arm V3 --session-dir /home/lzm/bench_runs/arms/real_run \
+    --cadence every_n:5 --max-absorbed 20 --resume
+
+# 批次 3：继续跑完所有 26 个战役
+python -m devtools.benchmarks.evolution.run_evolution_arm \
+    --corpus bench_runs/evolution_corpus/gaia_corpus_2026-09-04.jsonl \
+    --arm V3 --session-dir /home/lzm/bench_runs/arms/real_run \
+    --cadence every_n:5 --max-absorbed 26 --resume
+```
+
+**工作原理**：
+- `--max-absorbed N`：吸收的战役数达到 N 后，程序优雅退出
+- 检查发生在每条记录处理之前，所以不会有"半处理的记录"
+- 退出时进度已更新，`--resume` 会从下一条记录继续
+- 安全：不会出现重复处理或状态不一致
+
+**时间估算**（基于 smoke_test_14 实测）：
+- 每个战役平均 30 分钟（23-44 分钟不等）
+- 每条非晋升记录约 1.6 分钟（反思 + 记忆 + backlog）
+- 130 条语料 × every_n:5 = 26 个战役
+- 总计约 16-17 小时（可分批完成）
+
 ## 参数说明
 
 | 参数 | 默认 | 说明 |
@@ -58,12 +96,21 @@ python -m devtools.benchmarks.evolution.run_evolution_arm \
 | `--cadence` | `every_n:5` | promote 决策节奏（§10.8-4：吸收少可先 `every_n:3` 验证管线） |
 | `--budget` | `200.0`（USD） | 每会话独立总预算（§10.8-7 建议 ≥150） |
 | `--campaign-timeout` | `300`（秒） | 每次 promote 后等待战役周期落账的轮询上限 |
-| `--max-absorbed` | `10` | 吸收周期达到此数提前停止喂料（§3.5 停止条件） |
+| `--max-absorbed` | `10` | **分批运行关键参数**：吸收周期达到此数提前停止喂料。支持分批运行：第一次设为 10，resume 后设为 20，再 resume 设为 26。每次检查在记录处理前，不会有"半处理的记录"，resume 安全。 |
 | `--dry-run` | 关 | 只校验语料→轨迹→摘要加载（零成本） |
 
-## 会话期间监控（每 5 条语料）
+**Arms 说明**：
+- **V0**：基线（无特殊开关）
+- **V1**：SMART_ROUTING + SMART_MEMORY（智能路由 + 智能记忆）
+- **V2**：MULTI_AGENT_EVOLVER + SKILL_EVOLVER（多智能体进化 + 技能进化）
+- **V3**：全部开启（推荐用于真实实验）
+
+## 会话期间监控
+
+### 快速状态检查
 
 ```bash
+# 查看战役状态和成本
 python -c "
 import json, collections
 p = 'bench_runs/evolution/V0/data/state/evolution_checkpoints.jsonl'
@@ -73,10 +120,84 @@ print('outcome 分布:', dict(collections.Counter(r.get('cycle_outcome') for r i
 print('总成本 $:', round(sum(r.get('cost_usd', 0) for r in rows), 2))
 print('吸收 commit:', [r.get('commit_sha') for r in rows if r.get('cycle_outcome') == 'absorbed'])
 "
+
+# 查看最近的 git 提交
 git -C bench_runs/evolution/V0/clone log --oneline -3
+
+# 查看反思和 backlog 数量
 wc -l bench_runs/evolution/V0/data/logs/task_reflections.jsonl
 wc -l bench_runs/evolution/V0/data/memory/knowledge/improvement-backlog.md
 ```
+
+### 详细日志分析
+
+```bash
+# 查看最新日志（实时跟踪）
+tail -f bench_runs/evolution/V0/run_evolution_arm.log
+
+# 查看每条记录的处理情况
+grep "^\[run_evolution_arm\] ── \[记录" bench_runs/evolution/V0/run_evolution_arm.log
+
+# 查看战役启动和完成
+grep -E "\[战役#|campaign: 新周期|checkpoints:" bench_runs/evolution/V0/run_evolution_arm.log
+
+# 查看技能生成
+grep "\[技能\]" bench_runs/evolution/V0/run_evolution_arm.log
+
+# 查看决策情况
+grep "\[决策\]" bench_runs/evolution/V0/run_evolution_arm.log
+```
+
+### 使用 analyze_session.py 生成报告
+
+```bash
+# 生成完整的会话分析报告
+python devtools/benchmarks/evolution/analyze_session.py \
+    --session-dir /home/lzm/bench_runs/arms/real_run
+
+# 报告包含：
+# - 战役统计（周期数、吸收数、成本）
+# - 代码改动统计（提交数、文件数、行数）
+# - 技能生成统计（生成数、失败数）
+# - 反思和 backlog 统计
+```
+
+## 日志输出格式
+
+每条记录处理时会输出分类标签，便于监控和理解：
+
+```
+── [记录  5/11] 2023_level2:35 (L2) ──────────────────────
+[语料]    轨迹播种 175 行
+[反思]    目标: ... | 轮次 155 | 错误 16 | 标记: SHELL_EXIT_ERROR
+[反思]    摘要: <prose 前160字>
+[记忆]    knowledge_write「tool_registration」: ... | 落库 2/2
+[backlog] +ibl-xxx "..." (high | count=1)
+[技能]    资格: ✅ (ok) | 生成: xxx v1
+[信用]    +5 步计分: 最高 web_search 0.31 | 最低 browse_page 0.08
+[积累]    +1 经验 | 账本累计 5
+[决策]    cadence 1/5 → 未到期 | 跳过晋升
+[记录  5/11] 2023_level2:35: 反思1522字 rounds=155 mem=2 backlog=2 seed=175 promote=False
+
+[战役#1] 开: "..." (task xxx)
+[战役#1] 05m | 调用62 (edit 10, shell 17) | arg_err 2 | gate_blk 0
+[战役#1] ⤷ commit ✅ 24fda749bb
+[战役#1] ⤷ absorbed ✅
+
+── [里程碑 @记录5] 记录5 | 周期1 (吸收1, no_op0) | 技能3 | 经验5 | backlog开放8 ──
+```
+
+**标签说明**：
+- `[语料]`：轨迹播种行数
+- `[反思]`：LLM 反思的目标、轮次、错误、摘要
+- `[记忆]`：写入的知识和 scratchpad
+- `[backlog]`：新增的改进候选
+- `[技能]`：技能资格判定和生成结果
+- `[信用]`：步骤信用分配（关键步骤）
+- `[积累]`：经验账本累计
+- `[决策]`：晋升决策（cadence 状态、理由、目标）
+- `[战役#N]`：战役启动、进度、提交、吸收
+- `[里程碑]`：每 5 条记录的累计统计
 
 ## 注意（规格 §10.8 常见坑）
 
@@ -89,6 +210,118 @@ wc -l bench_runs/evolution/V0/data/memory/knowledge/improvement-backlog.md
 - `server.stop()` 只在全部语料喂完且战役结束后调用（驱动已处理）。
 - 会话目录是持久的（供溯源）：重跑请清理目录或换 `--session-dir`；
   断点续跑用 `--resume`（进度文件 `feed_progress.json`）。
+
+## 常见问题与故障排查
+
+### Q: 程序运行很慢，是不是卡住了？
+
+**A**: 检查日志输出。正常流程：
+- 每条记录处理约 1-2 分钟（反思 + 记忆 + backlog）
+- 每个战役约 20-40 分钟（agent 探索 + 实施 + 测试 + 提交）
+- 战役完成后，重启信号检测约 5 秒（已优化）
+
+如果长时间无输出，检查：
+```bash
+# 查看最新日志
+tail -20 bench_runs/evolution/V0/run_evolution_arm.log
+
+# 检查 server 进程
+ps aux | grep server.py
+
+# 检查 checkpoint 状态
+python -c "
+import json
+rows = [json.loads(l) for l in open('bench_runs/evolution/V0/data/state/evolution_checkpoints.jsonl')]
+print('最新 checkpoint:', rows[-1] if rows else '无')
+"
+```
+
+### Q: API 限流或失败怎么办？
+
+**A**: 使用 `--max-absorbed` 分批运行：
+1. 第一批：`--max-absorbed 10`（约 5 小时）
+2. 休息 5-10 分钟
+3. 第二批：`--max-absorbed 20 --resume`（再约 5 小时）
+4. 第三批：`--max-absorbed 26 --resume`（最后约 2 小时）
+
+每次 resume 都从上次停止的地方继续，不会有重复或冲突。
+
+### Q: Resume 后会重复处理已完成的记录吗？
+
+**A**: 不会。`--resume` 机制：
+- 检查在每条记录处理**之前**
+- 已处理的记录（无论成功或失败）都会跳过
+- 进度文件 `feed_progress.json` 记录 `last_index`
+- Resume 从 `corpus[last_index:]` 开始
+
+**安全场景**：
+- ✅ 正常终止后 resume：从下一条记录继续
+- ✅ 战役中途强制终止：进度未更新，会重试当前记录（但之前的部分工作保留）
+- ❌ 不要手动修改 `feed_progress.json`，会导致状态不一致
+
+### Q: 如何查看进化产生了什么代码改动？
+
+**A**: 查看 clone 目录的 git 历史：
+```bash
+cd bench_runs/evolution/V0/clone
+
+# 查看所有进化提交
+git log --oneline --grep="feat" --grep="fix"
+
+# 查看具体某个提交的改动
+git show <commit-sha>
+
+# 对比起点和当前状态
+git diff V0-evolved~10..V0-evolved --stat
+```
+
+### Q: 如何评估进化效果？
+
+**A**: 使用多维度评估：
+```bash
+# 1. 查看 session_ledger.json
+python -c "
+import json
+ledger = json.load(open('bench_runs/evolution/V0/session_ledger.json'))
+print('总周期:', ledger.get('cycle_outcome_counts', {}).get('total', 0))
+print('吸收数:', ledger.get('absorbed_count', 0))
+print('吸收率:', f\"{ledger.get('absorbed_count', 0) / max(1, ledger.get('cycle_outcome_counts', {}).get('total', 1)) * 100:.1f}%\")
+print('总成本: $', ledger.get('total_cost_usd', 0))
+"
+
+# 2. 查看代码改动统计
+git -C bench_runs/evolution/V0/clone log --oneline V0..V0-evolved | wc -l
+git -C bench_runs/evolution/V0/clone diff --stat V0..V0-evolved | tail -1
+
+# 3. 查看技能生成统计
+python -c "
+import json
+rows = [json.loads(l) for l in open('bench_runs/evolution/V0/data/state/skill_generation_history.jsonl')]
+print('技能生成数:', len(rows))
+print('成功:', sum(1 for r in rows if r.get('status') == 'success'))
+print('失败:', sum(1 for r in rows if r.get('status') == 'failed'))
+"
+```
+
+### Q: 如何清理失败的会话重新开始？
+
+**A**: 
+```bash
+# 方法 1：删除整个会话目录
+rm -rf bench_runs/evolution/V0
+
+# 方法 2：保留数据，只重置进度
+rm bench_runs/evolution/V0/feed_progress.json
+
+# 方法 3：新建会话目录
+python -m devtools.benchmarks.evolution.run_evolution_arm \
+    --corpus ... --session-dir bench_runs/evolution/V0_new
+```
+
+**注意**：删除会话目录会丢失所有进化成果（代码改动、技能、经验）。建议先备份：
+```bash
+tar -czf backup_V0.tar.gz bench_runs/evolution/V0
+```
 
 ## 移植到 Linux 服务器
 
