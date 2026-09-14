@@ -634,6 +634,13 @@ def poll_campaign_progress(data_root: pathlib.Path, timeout_sec: float = 300) ->
         if after > before:
             _log(f"campaign: 新周期已记录（{before} → {after}）")
             return {"campaign": True, "cycles_before": before, "cycles_after": after}
+        # Early exit: agent called request_restart, waiting for server bounce.
+        # Don't wait for checkpoint update (which only happens after restart).
+        restart_marker = data_root / "state" / "pending_restart_verify.json"
+        if restart_marker.is_file():
+            _log("campaign: 检测到 restart 信号——提前结束等待，等待 server 重启")
+            return {"campaign": False, "cycles_before": before,
+                    "cycles_after": after, "restart_pending": True}
         if not req.is_file() and not consumed:
             _log("campaign: promote 信号已被 supervisor 消费")
             consumed = True
