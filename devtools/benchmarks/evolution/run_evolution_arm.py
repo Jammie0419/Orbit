@@ -1454,9 +1454,11 @@ def main() -> int:
                     _cad = os.environ.get("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", "every_n:5")
                     _trace = dict(post_task_evolution._LAST_DECISION_TRACE)
                     if decision:
+                        _n_val = int(_cad.split(":")[1]) if ":" in _cad else 1
+                        _counter_n = _read_json(data_root / "state" / "post_task_evolution_counter.json").get("n", 0)
                         _cadence_txt = "llm" if _cad.startswith("llm") else (
                             "off" if _cad == "off" else
-                            f"{_read_json(data_root / 'state' / 'post_task_evolution_counter.json').get('n', 0) % max(1, _parse_cadence_n(_cad))}/{_parse_cadence_n(_cad)}")
+                            f"{_counter_n % max(1, _n_val)}/{_n_val}")
                         _log(f"[决策]    cadence {_cadence_txt} | LLM: promote ✅ "
                              f"理由: {_head(_trace.get('reason'), 90) or '—'}")
                         _log(f"[决策]    目标: {_head(decision.get('objective'), 100)}"
