@@ -296,6 +296,33 @@ def _read_json(path: pathlib.Path) -> dict:
         return {}
 
 
+def _experience_summary(exp: dict) -> str:
+    """Extract a one-line summary from an experience entry for the [Track-A/B] log."""
+    kind = exp.get("kind", "?")
+    task = str(exp.get("task_id") or "")[:12]
+    outcome = exp.get("cycle_outcome") or exp.get("outcome") or "?"
+    overall = exp.get("overall") or {}
+    obj_type = overall.get("objective_type", "?")
+    complexity = (overall.get("objective_complexity") or "?")[:1]  # h/m/l
+    critical = exp.get("critical_steps") or []
+    key_step = ""
+    if critical:
+        cs = critical[0]
+        key_step = f"{cs.get('tool', '?')}({cs.get('credit', 0):.2f})"
+    factors = overall.get("success_factors") or []
+    factor = factors[0][:60] if factors else ""
+    commit = exp.get("commit_sha", "")[:8] if "commit_sha" in exp else ""
+    parts = [f"{kind}={task}", f"结果={outcome}"]
+    if commit:
+        parts.append(f"commit={commit}")
+    parts.append(f"类型={obj_type}({complexity})")
+    if key_step:
+        parts.append(f"关键={key_step}")
+    if factor:
+        parts.append(f'因素="{factor}"')
+    return " | ".join(parts)
+
+
 def _git(args: list[str], cwd: pathlib.Path) -> tuple[int, str]:
     p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -1436,6 +1463,38 @@ def main() -> int:
                             _log(f"[决策]    {_skip} → 跳过晋升")
                         else:
                             _log(f"[决策]    LLM: 不晋升 理由: {_head(_trace.get('reason'), 90) or '—'}")
+                    # [Track-A] diff 经验账本——extract_task_experience 在 maybe_promote 内
+                    # 已写入新行（本地计算，无 LLM），这里只输出摘要。
+                    try:
+                        _exp_before = {r.get("task_id"): r for r in json.loads(
+                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
+                                encoding="utf-8-sig")) if r.get("kind") == "task"}
+                        _exp_after = {r.get("task_id"): r for r in json.loads(
+                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
+                                encoding="utf-8-sig")) if r.get("kind") == "task"}
+                        _new_task_ids = set(_exp_after.keys()) - set(_exp_before.keys())
+                        if _new_task_ids:
+                            for tid in list(_new_task_ids)[:2]:
+                                s = _experience_summary(_exp_after[tid])
+                                _log(f"[Track-A] {s}")
+                    except Exception:  # noqa: BLE001 - display only
+                        pass
+                    # [Track-B] diff cycle 经验行——consume_pending_cycles 在 maybe_promote 内
+                    # 也写入新行（可能带 LLM 调用），finalize 时再补一次。
+                    try:
+                        _cy_before = {r.get("task_id"): r for r in json.loads(
+                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
+                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
+                        _cy_after = {r.get("task_id"): r for r in json.loads(
+                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
+                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
+                        _new_cycle_ids = set(_cy_after.keys()) - set(_cy_before.keys())
+                        if _new_cycle_ids:
+                            for cid in list(_new_cycle_ids)[:2]:
+                                s = _experience_summary(_cy_after[cid])
+                                _log(f"[Track-B] {s}")
+                    except Exception:  # noqa: BLE001 - display only
+                        pass
                     _log(f"[记录 {i:2d}/{len(corpus)}] {rec['id']}: 反思{len(str(reflection_entry.get('reflection', '')))}字 "
                          f"rounds={usage_dict.get('rounds')} mem={len(mem_actions)} "
                          f"backlog={len(backlog)} seed={seeded} promote={bool(decision)}")
