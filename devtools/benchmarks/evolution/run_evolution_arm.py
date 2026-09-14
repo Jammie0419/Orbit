@@ -1415,7 +1415,11 @@ def main() -> int:
                         _log(f"[技能]    资格: {'✅' if _elig == 'ok' else '—'} ({_elig})")
                     except Exception:  # noqa: BLE001 - eligibility display is best-effort
                         pass
+                    _exp_before = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
+                    _exp_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
+                    if _exp_after > _exp_before:
+                        _log(f"[积累]   +{_exp_after - _exp_before} 经验 | 账本累计 {_exp_after}")
                     if decision:
                         _augment_request_contract(data_root)  # 战役执行契约注入 objective
                     # [技能] 生成事件：diff 生成历史的新增行
