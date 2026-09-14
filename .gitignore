@@ -114,3 +114,4 @@ devtools/benchmarks/editbench/fixtures_v2/
 
 # Terminal-Bench runtime files (user-specific, generated during benchmark runs)
 devtools/benchmarks/terminal_bench/exp
+docs/orbit/figures
