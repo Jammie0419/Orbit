@@ -7,6 +7,8 @@ SIGKILL the escaped descendants by PID, or timed-out subprocess trees (for
 example a pytest preflight run whose tests spawn children via
 ``subprocess_new_group_kwargs``) leak runaway orphan processes.
 """
+import subprocess
+
 import pytest
 
 
@@ -125,3 +127,48 @@ def test_isolated_server_env_disables_the_repo_health_test_gate(tmp_path, monkey
 
     monkeypatch.setenv("OUROBOROS_PRE_PUSH_TESTS", "1")
     assert server._env()["OUROBOROS_PRE_PUSH_TESTS"] == "1"
+
+
+def test_isolated_server_keeps_child_output_on_disk(tmp_path):
+    """A worker's warnings/tracebacks must survive the run: with the streams on
+    DEVNULL an isolated run's server.log held startup lines only, so a failed cycle
+    could not be diagnosed from the artifacts afterwards."""
+    from devtools.benchmarks.common.server_runner import IsolatedServer
+
+    session = tmp_path / "session"
+    clone = session / "clone"
+    clone.mkdir(parents=True)
+    server = IsolatedServer(
+        clone=clone, data_root=tmp_path / "data",
+        settings_path=tmp_path / "data" / "settings.json",
+    )
+
+    out = server._open_server_log("server.stdout.log")
+    err = server._open_server_log("server.stderr.log")
+    try:
+        assert out is not subprocess.DEVNULL and err is not subprocess.DEVNULL
+        # Beside the session, NOT inside the drive root a benchmark task can read.
+        assert (session / "server.stderr.log").is_file()
+        err.write("worker traceback goes here\n")
+        err.flush()
+        assert "worker traceback goes here" in (session / "server.stderr.log").read_text()
+    finally:
+        server._close_server_logs()
+
+
+def test_isolated_server_log_failure_falls_back_to_devnull(tmp_path, monkeypatch):
+    """A log file must never be able to fail startup."""
+    from devtools.benchmarks.common.server_runner import IsolatedServer
+
+    clone = tmp_path / "session" / "clone"
+    clone.mkdir(parents=True)
+    server = IsolatedServer(
+        clone=clone, data_root=tmp_path / "data",
+        settings_path=tmp_path / "data" / "settings.json",
+    )
+    monkeypatch.setattr(
+        "pathlib.Path.open", lambda *a, **kw: (_ for _ in ()).throw(OSError("nope"))
+    )
+
+    assert server._open_server_log("server.stderr.log") is subprocess.DEVNULL
+    server._close_server_logs()

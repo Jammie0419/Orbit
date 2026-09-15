@@ -259,6 +259,12 @@ class IsolatedServer:
         self.proc: subprocess.Popen | None = None
         # Restart-driver state: the last bounce signal (marker mtime + campaign
         # updated_at) this instance already performed a bounce for.
+        # The server runs in its own session and its workers are separate processes, so
+        # DEVNULL discarded their warnings and tracebacks outright (an isolated run's
+        # server.log holds startup lines only, zero warnings) — a failed cycle then
+        # cannot be diagnosed after the fact. Keep both streams on disk, beside the
+        # SESSION rather than inside the drive root a benchmark task can read.
+        self._server_log_fhs: list = []
         self._last_restart_signal: str = ""
         # Filled by _wait_ready: the HTTP runtime_version + the clone's HEAD/VERSION that
         # produced it, so a driver can record WHICH agent identity its numbers came from.
@@ -315,13 +321,37 @@ class IsolatedServer:
         patch_settings_ports(self.settings_path, host=self.host, port=self.port,
                              host_service_port=self.host_service_port)
 
+    def _open_server_log(self, name: str):
+        """Append-only handle for a server stream, or DEVNULL when it cannot be opened.
+
+        A log file must never be able to fail startup: the fallback keeps the old
+        behaviour instead of raising inside start().
+        """
+        path = self.clone.parent / name
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("a", encoding="utf-8", errors="replace")
+        except Exception:
+            return subprocess.DEVNULL
+        self._server_log_fhs.append(handle)
+        return handle
+
+    def _close_server_logs(self) -> None:
+        for handle in self._server_log_fhs:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        self._server_log_fhs = []
+
     def start(self, ready_timeout: float = 180) -> "IsolatedServer":
         self._patch_settings_ports()
         # Own process group/session so a hung server + its worker children can be
         # killed as a tree (platform_layer), not orphaned past graceful SIGTERM.
         self.proc = subprocess.Popen(
             [sys.executable, "server.py"], cwd=str(self.clone), env=self._env(),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=self._open_server_log("server.stdout.log"),
+            stderr=self._open_server_log("server.stderr.log"),
             **subprocess_new_group_kwargs(),
         )
         try:
@@ -530,6 +560,7 @@ class IsolatedServer:
                     self.proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
+        self._close_server_logs()
 
     def __enter__(self) -> "IsolatedServer":
         return self.start()
