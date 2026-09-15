@@ -107,3 +107,21 @@ def test_isolated_server_env_arms_the_parent_death_signal(tmp_path):
         settings_path=tmp_path / "data" / "settings.json",
     )
     assert server._env()["OUROBOROS_DIE_WITH_PARENT"] == "1"
+
+
+def test_isolated_server_env_disables_the_repo_health_test_gate(tmp_path, monkeypatch):
+    """A benchmark commit must not be gated by the repository's own size-debt
+    census: with advisory bypassed, commit_reviewed preflights the WHOLE tests/
+    tree, so pre-existing red health tests block every commit and landing one
+    depends on the agent finding skip_tests=True. An operator value still wins."""
+    from devtools.benchmarks.common.server_runner import IsolatedServer
+
+    server = IsolatedServer(
+        clone=tmp_path / "clone",
+        data_root=tmp_path / "data",
+        settings_path=tmp_path / "data" / "settings.json",
+    )
+    assert server._env()["OUROBOROS_PRE_PUSH_TESTS"] == "0"
+
+    monkeypatch.setenv("OUROBOROS_PRE_PUSH_TESTS", "1")
+    assert server._env()["OUROBOROS_PRE_PUSH_TESTS"] == "1"

@@ -292,6 +292,17 @@ class IsolatedServer:
             # still writing to this session's clone/data. Tie it to the harness.
             "OUROBOROS_DIE_WITH_PARENT": "1",
         })
+        # Benchmark runs must not be gated by the repository's own size-debt census.
+        # When advisory is bypassed, commit_reviewed runs the WHOLE tests/ tree as a
+        # preflight, so pre-existing red health tests (the size ratchet / oversized
+        # module+function census) block every commit, and landing one depends on the
+        # agent discovering skip_tests=True — smoke_test_14's commits all carried it,
+        # i.e. the landed commits ran no tests anyway. This flag makes that explicit
+        # and consistent across runs instead of agent-dependent; the triad and scope
+        # reviews still run. An operator-supplied value still wins.
+        # Precedent: devtools/benchmarks/swe_bench_pro/e1v2/run_pro.py passes the same
+        # flag to its benchmark containers.
+        env.setdefault("OUROBOROS_PRE_PUSH_TESTS", "0")
         return env
 
     def _patch_settings_ports(self) -> None:
