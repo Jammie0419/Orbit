@@ -1671,6 +1671,7 @@ def main() -> int:
                 _start_emitted = False
                 _progress_emitted = False
                 _block_emitted = False
+                _settle_emitted = False
                 try:
                     # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
                     # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
@@ -1866,7 +1867,8 @@ def main() -> int:
                         )
                     except Exception:  # noqa: BLE001 - display only
                         pass
-                    # ⑪沉淀：累计周期账本随本记录块一起渲染（与旧 checkpoints 行同一口径）。
+                    # 累计周期账本（与旧 checkpoints 行同一口径）：数据先收好，
+                    # 但要等战役的 ⑦⑧⑨ 打完才发（见下面的 render_record_settle）。
                     _view.checkpoint_lines = tuple(checkpoint_block_lines(data_root))
                     _block_emitted = True
                     _emit_record_tail(_view)
@@ -1877,6 +1879,14 @@ def main() -> int:
                         _campaign_transitions(data_root)
                     except Exception:  # noqa: BLE001 - display only
                         pass
+                    # ⑪沉淀 排在战役的 ⑦⑧⑨ 之后：它报告的是战役落账后的累计账本。
+                    if not _settle_emitted:
+                        _settle_emitted = True
+                        try:
+                            for _line in leap_report.render_record_settle(_view):
+                                _log(_line)
+                        except Exception:  # noqa: BLE001 - display only
+                            pass
                     try:
                         server.maybe_bounce_for_restart()
                     except Exception as exc:  # noqa: BLE001 - bounce failure ≠ feed failure
@@ -1902,6 +1912,13 @@ def main() -> int:
                             pass
                     if _view is not None and not _block_emitted:
                         _emit_record_tail(_view)
+                    if _view is not None and not _settle_emitted:
+                        _settle_emitted = True
+                        try:
+                            for _line in leap_report.render_record_settle(_view):
+                                _log(_line)
+                        except Exception:  # noqa: BLE001 - display only
+                            pass
                     _log(f"记录 {i:2d}/{len(corpus)} {rec['id']}: ✗ 失败: {exc}")
                     progress.setdefault("failures", []).append({"id": rec["id"], "error": str(exc)})
                 progress["last_index"] = i

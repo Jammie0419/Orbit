@@ -270,6 +270,7 @@ def test_three_phase_emission_keeps_every_line_once():
     start = leap_report.render_record_start(view)
     progress = leap_report.render_record_progress(view)
     tail = leap_report.render_record_tail(view)
+    settle = leap_report.render_record_settle(view)
 
     # ① header + seed right after seeding
     assert any("记录  5/11" in l for l in start)
@@ -284,7 +285,9 @@ def test_three_phase_emission_keeps_every_line_once():
     assert any("经验（账本累计 11）" in l for l in tail)
 
     # No line is duplicated between the halves and none is dropped.
-    all_lines = start + progress + tail
+    # ⑪沉淀 rides after the campaign transitions, so it is its own phase.
+    assert any("checkpoints:" in l for l in settle)
+    all_lines = start + progress + tail + settle
     assert len(all_lines) == len(set(all_lines)), "a line was emitted twice"
     joined = "\n".join(all_lines)
     for datum in ("轨迹播种 175 行", "轮次 155", "落库 1/1", "backlog 候选 2",
@@ -311,11 +314,45 @@ def test_tail_follows_algorithm_order_attribution_then_its_memory_write():
     lines = leap_report.render_record_tail(_full_view())
     order = []
     for i, line in enumerate(lines):
-        for label in ("③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传", "⑪沉淀"):
+        for label in ("③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传"):
             if label in line and label not in order:
                 order.append(label)
-    assert order == ["③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传", "⑪沉淀"], order
+    assert order == ["③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传"], order
+    # ⑪沉淀 是战役落账那一步（step 12），排在战役行之后，不在本组里。
+    assert all("⑪沉淀" not in line for line in lines)
+    assert any("⑪沉淀" in line for line in leap_report.render_record_settle(_full_view()))
     # 具体到那两行
     attr = next(i for i, l in enumerate(lines) if "信用 +" in l)
     booked = next(i for i, l in enumerate(lines) if "经验（账本累计" in l)
     assert attr < booked
+
+
+def test_harness_emits_a_record_in_phases_not_as_one_block():
+    """The run must emit each record at the moment its data exists — the batching made
+    a slow provider look like a dead run. This pins the WIRING in the harness (the
+    render-level tests above cannot see whether the run calls them in order)."""
+    import inspect
+
+    from devtools.benchmarks.evolution import run_evolution_arm as arm
+
+    source = inspect.getsource(arm.main)
+    order = [
+        "render_record_start(_view)",
+        "render_record_progress(_view)",
+        "_emit_record_tail(_view)",
+        "_campaign_transitions(data_root)",
+        "render_record_settle(_view)",
+    ]
+    positions = []
+    for call in order:
+        index = source.find(call)
+        assert index != -1, f"harness never calls {call}"
+        positions.append(index)
+    assert positions == sorted(positions), (
+        "record emission order must be start -> progress -> tail -> campaign -> settle, "
+        f"found {order} at {positions}"
+    )
+    # The old one-shot emission must be gone, or the batching could silently return.
+    assert "render_record_block(" not in source, (
+        "main() must not emit the whole record in one call"
+    )

@@ -203,9 +203,8 @@ def _render_memory(view: RecordView, lines: List[str]) -> None:
     body: List[str] = []
     actions = _seq(view.memory_actions)
     if actions:
-        body.append(" | ".join(
-            f"{label}: {_head(content, 60)}" for label, content in actions
-        ))
+        # 每条一行：旧日志就是一行一条，挤成一条会在每次 2-3 条时超长截断。
+        body.extend(f"{label}: {_head(content, 60)}" for label, content in actions)
         if view.memory_applied is not None:
             body.append(f"落库 {view.memory_applied}/{view.memory_total}")
     elif not view.memory_parse_failed:
@@ -337,7 +336,18 @@ def render_record_tail(view: RecordView) -> List[str]:
     for render in (_render_attribute, _render_experience, _render_worthwhile, _render_plan,
                    _render_behavioural_heredity):
         render(view, lines)
+    return lines
+
+
+def render_record_settle(view: RecordView) -> List[str]:
+    """⑪沉淀 — step 12, `M ← MemWrite(M, Δ, S, 结果)`.
+
+    Emitted AFTER the campaign transitions, not with the record's own operators: the
+    cumulative ledger it reports is the write that follows the cycle's mutation and
+    heredity (⑦⑧⑨), so rendering it first made the log read 沉淀 → 变异.
+    """
     checkpoints = _seq(view.checkpoint_lines)
+    lines: List[str] = []
     if checkpoints:
         _emit(lines, 11, list(checkpoints))
     return lines
@@ -349,7 +359,7 @@ def render_record_block(view: RecordView) -> List[str]:
     The run emits the halves at their own moments — see render_record_progress/tail —
     while this grouping stays for tests and for callers that want the record at once.
     """
-    return render_record_progress(view) + render_record_tail(view)
+    return render_record_progress(view) + render_record_tail(view) + render_record_settle(view)
 
 
 def render_evolution_event(*, cycle: Any, kind: str, detail: str, mark: str = "") -> str:
