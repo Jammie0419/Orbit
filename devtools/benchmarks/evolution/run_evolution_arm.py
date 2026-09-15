@@ -1677,6 +1677,7 @@ def main() -> int:
                 _progress_emitted = False
                 _block_emitted = False
                 _settle_emitted = False
+                _deferred_campaign_lines: list = []
                 try:
                     # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
                     # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
@@ -1806,14 +1807,18 @@ def main() -> int:
                             data_root, _campaigns_baseline,
                             start_timeout=max(60.0, min(float(args.campaign_timeout), 300.0)),
                         )
-                        _log(f"[战役]    第 {_session_campaigns}/{args.max_absorbed} 个战役已提交请求")
+                        # 延迟到 ⑤⑥ 之后、⑦ 之前打印：这两行是"战役请求已提交"，
+                        # 在 promote 步内立刻打会落在本记录的 ③④⑤⑥ 之前，与算法顺序相反。
+                        _deferred_campaign_lines.append(
+                            f"[战役]    第 {_session_campaigns}/{args.max_absorbed} 个战役已提交请求")
                     # 上限判定独立于 decision：战役可能晚于 promote 决策出现，而
                     # promote=False 的记录不会再进上面那个分支，只在里面判会漏掉复查。
                     if not _budget_reached and session_budget_reached(
                         data_root, _campaigns_baseline, args.max_absorbed
                     ):
-                        _log(f"达到战役上限 {args.max_absorbed}，停止喂料"
-                             f"（剩余 {len(remaining) - pos} 条记录未处理）")
+                        _deferred_campaign_lines.append(
+                            f"[战役]    达到战役上限 {args.max_absorbed}，停止喂料"
+                            f"（剩余 {len(remaining) - pos} 条记录未处理）")
                         _budget_reached = True  # break after progress save (resume-safe)
                     # ⑨遗传·行为级：技能生成事件（diff 生成历史的新增行）
                     _hist_after = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
@@ -1886,6 +1891,9 @@ def main() -> int:
                     _view.checkpoint_lines = tuple(checkpoint_block_lines(data_root))
                     _block_emitted = True
                     _emit_record_tail(_view)
+                    for _line in _deferred_campaign_lines:
+                        _log(_line)
+                    _deferred_campaign_lines = []
                     # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
                     # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
                     # cadence 边界（见循环上方的 wait_for_campaign_completion）。
@@ -1926,6 +1934,9 @@ def main() -> int:
                             pass
                     if _view is not None and not _block_emitted:
                         _emit_record_tail(_view)
+                    for _line in _deferred_campaign_lines:
+                        _log(_line)
+                    _deferred_campaign_lines = []
                     if _view is not None and not _settle_emitted:
                         _settle_emitted = True
                         try:
@@ -1961,8 +1972,7 @@ def main() -> int:
                 # Say WHY feeding stopped: hitting the session's campaign quota is not
                 # "the corpus is exhausted", and records are still unconsumed.
                 if _budget_reached:
-                    _wait(f"达到战役上限 {args.max_absorbed} 停止喂料"
-                         f"——等待最后一个战役完成…")
+                    _wait("等待最后一个战役完成…")
                 else:
                     _wait("语料喂完——等待最后一个战役完成…")
                 try:
