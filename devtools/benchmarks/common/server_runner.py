@@ -420,9 +420,8 @@ class IsolatedServer:
             camp = {}
         if not marker.exists() and tx_outcome != "waiting_for_restart":
             return False
-        signal_key = f"{marker.stat().st_mtime_ns if marker.exists() else 0}:{camp_updated}"
-        if self._last_restart_signal == signal_key:
-            return False
+        # Check idle FIRST — if busy, skip idempotency so next record can retry.
+        # Only update _last_restart_signal on successful bounce (or when truly idle+done).
         try:
             st = self._state(timeout=5)
             idle = (int(st.get("pending_count") or 0) == 0
@@ -430,6 +429,13 @@ class IsolatedServer:
         except (urllib.error.URLError, OSError, ValueError):
             idle = False
         if not idle:
+            # Server still busy processing restart — skip without updating idempotency
+            # so the NEXT record's bounce call can retry.
+            print(f"[isolated-server] restart signal: server busy, will retry next record", flush=True)
+            return False
+        # Server is idle — safe to bounce. Enforce idempotency NOW.
+        signal_key = f"{marker.stat().st_mtime_ns if marker.exists() else 0}:{camp_updated}"
+        if self._last_restart_signal == signal_key:
             return False
         print(f"[isolated-server] restart signal staged (marker={marker.exists()} "
               f"tx_outcome={tx_outcome or '-'}) — bouncing server so boot "

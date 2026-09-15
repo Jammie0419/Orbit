@@ -408,20 +408,47 @@ def generate_reflection(
     )
 
     light_model = get_light_model()
-    try:
-        from ouroboros.llm_observability import chat_observed
+    from ouroboros.llm_observability import chat_observed
+    import time as _time
 
-        resp_msg, refl_usage = chat_observed(
-            llm_client,
-            drive_root=pathlib.Path(str(task.get("drive_root") or "../data")),
-            task_id=str(task.get("id") or task.get("task_id") or "reflection"),
-            call_type="task_reflection",
-            messages=[{"role": "user", "content": prompt}],
-            model=light_model,
-            reasoning_effort="low",
-            max_tokens=16384,
-        )
-        raw_reflection_text = (resp_msg.get("content") or "").strip()
+    # Retry on transient errors (502, transport, connection) with exponential backoff.
+    # Non-transient errors (400, auth, model-not-found) fail immediately.
+    _resp_msg, _refl_usage = None, None
+    _last_exc = None
+    for _attempt in range(1, 4):
+        try:
+            _resp_msg, _refl_usage = chat_observed(
+                llm_client,
+                drive_root=pathlib.Path(str(task.get("drive_root") or "../data")),
+                task_id=str(task.get("id") or task.get("task_id") or "reflection"),
+                call_type="task_reflection",
+                messages=[{"role": "user", "content": prompt}],
+                model=light_model,
+                reasoning_effort="low",
+                max_tokens=16384,
+            )
+            break
+        except Exception as _exc:
+            _last_exc = _exc
+            _err_str = str(_exc).lower()
+            # Only retry on transient errors
+            if any(k in _err_str for k in ("502", "transport", "connection", "timeout",
+                                             "retry", "tempor", "fetch failed")):
+                if _attempt < 3:
+                    _wait = 2 ** (_attempt - 1)
+                    log.warning("Reflection LLM transient error (attempt %d/3), retrying in %ds: %s",
+                                _attempt, _wait, _exc)
+                    _time.sleep(_wait)
+                    continue
+            # Non-transient or final attempt: fall through
+            break
+    else:
+        _resp_msg, _refl_usage = None, None
+
+    try:
+        if _resp_msg is None:
+            raise _last_exc  # all attempts exhausted
+        raw_reflection_text = (_resp_msg.get("content") or "").strip()
         task_id_str = str(task.get("id", "") or "")
 
         # Backlog is the last trailing line; peel it first, then memory actions.

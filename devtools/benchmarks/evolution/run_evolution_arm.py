@@ -241,6 +241,15 @@ _CAMPAIGN_CONTRACT_SUFFIX = (
     "\n3. 验证：用 run_command 运行相关测试"
     "\n4. 提交：调用 commit_reviewed 提交代码——缺了这一步整个进化周期一律记为 no_op"
     "\n5. 收尾：调用 request_restart"
+    "\n\n⚠️ 工具使用纪律（避免常见错误）："
+    "\n• run_command 参数格式：cmd 必须是数组，不能是字符串"
+    "\n  正确：run_command(cmd=[\"pytest\", \"tests/test_xxx.py\"])"
+    "\n  错误：run_command(cmd='[\"pytest\", \"tests/test_xxx.py\"]')  ← 字符串会解析失败"
+    "\n  如需 shell 语法：run_command(cmd=[\"sh\", \"-c\", \"cmd1 | cmd2\"])"
+    "\n• edit_text 编辑前必须 read_file 获取最新内容——不要假设文件内容"
+    "\n• 测试修复限制：最多修复 3 次，仍失败则 git checkout tests/ 回滚测试文件，只保留功能代码提交"
+    "\n• 提交前检查：git status 确保没有超出范围的文件，git restore 丢弃不需要的修改"
+    "\n• request_restart 前：git status 必须干净（无未暂存修改），否则先 git restore 清理"
 )
 
 
@@ -299,7 +308,7 @@ def _read_json(path: pathlib.Path) -> dict:
 def _experience_summary(exp: dict) -> str:
     """Extract a one-line summary from an experience entry for the [Track-A/B] log."""
     kind = exp.get("kind", "?")
-    task = str(exp.get("task_id") or "")[:12]
+    task = str(exp.get("task_id") or "")[:24]
     outcome = exp.get("cycle_outcome") or exp.get("outcome") or "?"
     overall = exp.get("overall") or {}
     obj_type = overall.get("objective_type", "?")
@@ -1423,6 +1432,16 @@ def main() -> int:
                     except Exception:  # noqa: BLE001 - eligibility display is best-effort
                         pass
                     _exp_before = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
+                    _exp_path = data_root / "state" / "evolution_experiences.jsonl"
+                    # 快照：供 Track-A/B diff 使用（在 maybe_promote 写入之前捕获）
+                    # JSONL 格式：用 splitlines 逐行解析，兼容 0/1/N 条记录
+                    try:
+                        _pre_rows = [json.loads(l) for l in _exp_path.read_text(
+                            encoding="utf-8-sig").splitlines() if l.strip()]
+                    except (OSError, json.JSONDecodeError):
+                        _pre_rows = []
+                    _pre_exp_task = {r.get("task_id"): r for r in _pre_rows if r.get("kind") == "task"}
+                    _pre_exp_cy = {r.get("task_id"): r for r in _pre_rows if r.get("kind") == "cycle"}
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
                     _exp_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
                     if _exp_after > _exp_before:
@@ -1477,34 +1496,25 @@ def main() -> int:
                         else:
                             _log(f"[决策]    LLM: 不晋升 理由: {_head(_trace.get('reason'), 90) or '—'}")
                     # [Track-A] diff 经验账本——extract_task_experience 在 maybe_promote 内
-                    # 已写入新行（本地计算，无 LLM），这里只输出摘要。
                     try:
-                        _exp_before = {r.get("task_id"): r for r in json.loads(
+                        _after_rows = [json.loads(l) for l in (
                             (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "task"}
-                        _exp_after = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "task"}
-                        _new_task_ids = set(_exp_after.keys()) - set(_exp_before.keys())
+                                encoding="utf-8-sig")).splitlines() if l.strip()]
+                        _exp_after_map = {r.get("task_id"): r for r in _after_rows if r.get("kind") == "task"}
+                        _new_task_ids = set(_exp_after_map.keys()) - set(_pre_exp_task.keys())
                         if _new_task_ids:
                             for tid in list(_new_task_ids)[:2]:
-                                s = _experience_summary(_exp_after[tid])
+                                s = _experience_summary(_exp_after_map[tid])
                                 _log(f"[Track-A] {s}")
                     except Exception:  # noqa: BLE001 - display only
                         pass
                     # [Track-B] diff cycle 经验行——consume_pending_cycles 在 maybe_promote 内
-                    # 也写入新行（可能带 LLM 调用），finalize 时再补一次。
                     try:
-                        _cy_before = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
-                        _cy_after = {r.get("task_id"): r for r in json.loads(
-                            (data_root / "state" / "evolution_experiences.jsonl").read_text(
-                                encoding="utf-8-sig")) if r.get("kind") == "cycle"}
-                        _new_cycle_ids = set(_cy_after.keys()) - set(_cy_before.keys())
+                        _cy_after_map = {r.get("task_id"): r for r in _after_rows if r.get("kind") == "cycle"}
+                        _new_cycle_ids = set(_cy_after_map.keys()) - set(_pre_exp_cy.keys())
                         if _new_cycle_ids:
                             for cid in list(_new_cycle_ids)[:2]:
-                                s = _experience_summary(_cy_after[cid])
+                                s = _experience_summary(_cy_after_map[cid])
                                 _log(f"[Track-B] {s}")
                     except Exception:  # noqa: BLE001 - display only
                         pass

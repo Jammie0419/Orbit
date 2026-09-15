@@ -288,16 +288,40 @@ def _decide_promotion(env: Any, task: Dict[str, Any], reflection_entry: Optional
         chooser_model = str(
             os.environ.get("OUROBOROS_MODEL", "") or SETTINGS_DEFAULTS["OUROBOROS_MODEL"]
         ).strip()
-        resp, usage = chat_observed(
-            client,
-            drive_root=drive_root,
-            task_id=str(task.get("id") or "post_task_evolution"),
-            call_type="post_task_evolution_decision",
-            messages=[{"role": "user", "content": prompt}],
-            model=chooser_model,
-            reasoning_effort="medium",
-            max_tokens=8192,
-        )
+        # Retry on transient errors (502/transport) with exponential backoff.
+        import time as _time
+        _resp, _usage = None, None
+        _last_exc = None
+        for _attempt in range(1, 4):
+            try:
+                _resp, _usage = chat_observed(
+                    client,
+                    drive_root=drive_root,
+                    task_id=str(task.get("id") or "post_task_evolution"),
+                    call_type="post_task_evolution_decision",
+                    messages=[{"role": "user", "content": prompt}],
+                    model=chooser_model,
+                    reasoning_effort="medium",
+                    max_tokens=8192,
+                )
+                break
+            except Exception as _exc:
+                _last_exc = _exc
+                _err_str = str(_exc).lower()
+                if any(k in _err_str for k in ("502", "transport", "connection", "timeout",
+                                                 "retry", "tempor", "fetch failed")):
+                    if _attempt < 3:
+                        _wait = 2 ** (_attempt - 1)
+                        log.warning("Evolution decision LLM transient error (attempt %d/3), retry in %ds: %s",
+                                    _attempt, _wait, _exc)
+                        _time.sleep(_wait)
+                        continue
+                break
+        else:
+            _resp, _usage = None, None
+        if _resp is None:
+            raise _last_exc
+        resp, usage = _resp, _usage
         if usage:
             try:
                 from supervisor.state import update_budget_from_usage
