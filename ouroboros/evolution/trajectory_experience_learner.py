@@ -16,6 +16,7 @@ silently to a structured placeholder so the promotion chain can never break.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import pathlib
@@ -31,12 +32,15 @@ CONSUMED_CURSOR_REL = pathlib.Path("state") / "evolution_consumed.json"
 TOOLS_LOG_REL = pathlib.Path("logs") / "tools.jsonl"
 CHECKPOINTS_REL = pathlib.Path("state") / "evolution_checkpoints.jsonl"
 
-# Credit formula (document 原案): base + success - error + fast + token-thrifty.
+# Credit formula (document 原案): base + success - error + fast.
+# The document's token-thrifty term is NOT implemented: `logs/tools.jsonl` rows
+# carry no per-step token count (ts / tool / task_id / args / result_preview /
+# is_error / status / refs), so the term could never be awarded — it was dead
+# weight that still read as if it scored something.
 CREDIT_BASE = 0.5
 CREDIT_SUCCESS = 0.2
 CREDIT_ERROR = -0.3
-CREDIT_FAST = 0.1  # applies only when duration_ms is known (< 1000ms)
-CREDIT_THRIFTY = 0.1  # applies only when tokens_used is known (< 500)
+CREDIT_FAST = 0.1  # step latency known and < 1000ms (see load_task_steps)
 
 # Stage keywords that mark "verification-stage" failure signals in a cycle's
 # extracted experience — the planner strengthens verification_plan on these.
@@ -61,6 +65,25 @@ def _loose_json(text: str) -> Optional[Dict[str, Any]]:
         return obj if isinstance(obj, dict) else None
     except Exception:
         return None
+
+
+def _parse_ts(value: Any) -> Optional[float]:
+    """Epoch seconds for a tool-log ``ts``, or None when unparseable.
+
+    Rows are written by ``utc_now_iso`` (``...+00:00``); a naive or malformed value
+    yields None so the caller leaves the derived field absent instead of inventing
+    a timing that was never observed.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
 
 
 def _truncate_repr(value: Any, limit: int) -> str:
@@ -113,6 +136,13 @@ class TrajectoryExperienceLearner:
         Matches rows where ``task_id`` equals the target (root task; evolution
         cycles are root tasks too). Unknown/missing fields are left absent so
         the credit formula skips only what is truly unknown.
+
+        ``duration_ms`` is derived from the gap between consecutive rows of THIS
+        task: it is the step's wall latency (the model turn that produced the call
+        plus the call itself), which is the only timing signal the tool log
+        carries — rows have no per-step duration field. It is an upper bound on the
+        call's own execution time, and the first step has none. Without this the
+        fast-credit term in ``assign_credits`` could never fire.
         """
         task_id = str(task_id or "").strip()
         if not task_id:
@@ -121,6 +151,7 @@ class TrajectoryExperienceLearner:
         if not path.exists():
             return []
         steps: List[Dict[str, Any]] = []
+        prev_ts: Optional[float] = None
         try:
             with path.open(encoding="utf-8") as fh:
                 for line in fh:
@@ -139,7 +170,7 @@ class TrajectoryExperienceLearner:
                         row.get("status") or ""
                     ).strip().lower() in {"error", "timeout"}
                     args = row.get("args")
-                    steps.append({
+                    step = {
                         "step_id": len(steps),
                         "tool": str(row.get("tool") or ""),
                         "is_error": is_error,
@@ -149,7 +180,20 @@ class TrajectoryExperienceLearner:
                         # consumes call arguments; secrets were scrubbed at write
                         # time by sanitize_tool_args_for_log).
                         "args": _truncate_repr(args, 400),
-                    })
+                    }
+                    ts_value = _parse_ts(row.get("ts"))
+                    if ts_value is None:
+                        # An unreadable stamp leaves the NEXT step unmeasurable too:
+                        # spanning it would attribute a multi-step interval to one
+                        # step and can deny a fast step its credit.
+                        prev_ts = None
+                    else:
+                        if prev_ts is not None:
+                            gap_ms = (ts_value - prev_ts) * 1000.0
+                            if gap_ms >= 0:
+                                step["duration_ms"] = gap_ms
+                        prev_ts = ts_value
+                    steps.append(step)
         except Exception:
             log.debug("evolution layer: tools.jsonl read failed", exc_info=True)
             return []
@@ -163,7 +207,8 @@ class TrajectoryExperienceLearner:
         """Per-step credit scores, normalized to sum 1.0 (document formula).
 
         Only signals the trace actually carries are rewarded/penalized:
-        success +0.2, error -0.3, fast (<1000ms) +0.1, token-thrifty (<500) +0.1.
+        success +0.2, error -0.3, fast (<1000ms) +0.1. See ``load_task_steps`` for
+        how ``duration_ms`` is derived and why no token term exists.
         """
         if not steps:
             return []
@@ -177,9 +222,6 @@ class TrajectoryExperienceLearner:
             duration = step.get("duration_ms")
             if isinstance(duration, (int, float)) and 0 <= duration < 1000:
                 credit += CREDIT_FAST
-            tokens = step.get("tokens_used")
-            if isinstance(tokens, (int, float)) and 0 <= tokens < 500:
-                credit += CREDIT_THRIFTY
             credits.append({
                 "step_id": step.get("step_id", 0),
                 "tool": str(step.get("tool") or ""),
@@ -331,6 +373,43 @@ class TrajectoryExperienceLearner:
     # Storage + queries
     # ------------------------------------------------------------------ #
 
+    def _task_experience_recorded(self, task_id: str) -> bool:
+        """Has this task already contributed a Track-A experience row?
+
+        Track B advances a cursor, so re-reading its ledger is idempotent; Track A
+        had no such guard, and re-processing a record (a resume, or a retry after a
+        partial failure) appended the same task's credits again. Every duplicate
+        skewed the tool/success statistics that ``suggest_evolution_strategy``
+        aggregates, and inflated the ledger count the runner reports.
+
+        Fails open (False) on a read error: a duplicate row is better than
+        silently dropping an experience.
+        """
+        tid = str(task_id or "").strip()
+        if not tid:
+            return False
+        try:
+            if not self.experiences_path.exists():
+                return False
+            with self.experiences_path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if (
+                        isinstance(row, dict)
+                        and str(row.get("kind") or "") == "task"
+                        and str(row.get("task_id") or "") == tid
+                    ):
+                        return True
+        except Exception:
+            log.debug("evolution layer: task experience dedup read failed", exc_info=True)
+        return False
+
     def store_experience(
         self,
         *,
@@ -341,6 +420,12 @@ class TrajectoryExperienceLearner:
         steps: List[Dict[str, Any]],
         overall: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        if kind == "task" and self._task_experience_recorded(task_id):
+            log.debug(
+                "evolution layer: task experience already recorded (task=%s) — skipping",
+                task_id,
+            )
+            return None
         credits = self.assign_credits(steps)
         critical = self.identify_critical_steps(credits)
         record = {

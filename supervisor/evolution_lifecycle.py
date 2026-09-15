@@ -854,6 +854,93 @@ def _resume_evolution_terminal_effects(
     return resumed
 
 
+def _close_post_task_backlog(campaign: Dict[str, Any]) -> None:
+    """Close the promoted backlog item that a verified-absorbed cycle addressed.
+
+    Only on ABSORPTION — closing at commit time would retire an item whose commit
+    can still fail restart verification. The boot-reconcile sites in
+    ``agent_startup_checks`` have always done this; this task-done path did not,
+    so an absorption that completed before its terminal arrived left the item
+    open forever even though the work landed.
+    """
+    backlog_id = str(campaign.get("post_task_backlog_id") or "").strip()
+    if not backlog_id:
+        return
+    try:
+        from supervisor import queue
+        from ouroboros.improvement_backlog import close_backlog_items
+
+        close_backlog_items(pathlib.Path(queue.DRIVE_ROOT), ids=[backlog_id])
+    except Exception:
+        log.debug("Post-task backlog close-on-absorb failed", exc_info=True)
+    campaign.pop("post_task_backlog_id", None)
+
+
+def _backfill_replay_cycle_accounting(
+    campaign: Dict[str, Any],
+    campaign_id: str,
+    task_id: str,
+    replay_tx: Dict[str, Any],
+    *,
+    rounds: int,
+    cost_usd: Optional[float],
+    cost_accounting_status: str,
+    outcome_axes: Dict[str, Any],
+) -> bool:
+    """Record a replayed terminal's cost/rounds when the earlier write had none.
+
+    A cycle that boot reconciliation absorbs *before* its task terminal arrives is
+    written straight into ``transaction_history``. The terminal that follows is a
+    replay and used to return without recording anything, so that cycle's rounds
+    and cost never reached ``campaign["history"]`` or ``budget_spent_usd`` — the
+    campaign under-reported what it actually spent (and a cycle the boot path
+    counted never moved ``cycles_done``).
+
+    Keyed on the transaction, so repeated replays cannot append twice. Never
+    raises: the terminal itself is already durable, and a failed backfill must not
+    turn an idempotent replay into an error.
+    """
+    tx_id = str((replay_tx or {}).get("transaction_id") or "")
+    if not tx_id:
+        return False
+    for row in campaign.get("history") or []:
+        if not isinstance(row, dict):
+            continue
+        row_tx = row.get("transaction") if isinstance(row.get("transaction"), dict) else {}
+        if str(row_tx.get("transaction_id") or "") == tx_id:
+            return False  # this cycle is already in the ledger
+    cost_available = cost_accounting_status == "available" and cost_usd is not None
+    if not rounds and not cost_available:
+        return False  # the replay carried nothing worth recording
+    history = list(campaign.get("history") or [])
+    history.append({
+        "task_id": str(task_id or ""),
+        "ts": utc_now_iso(),
+        "cost_usd": float(cost_usd) if cost_available else None,
+        "cost_accounting_status": "available" if cost_available else "unavailable",
+        "outcome_axes": normalize_outcome_axes({"outcome_axes": outcome_axes or {}}),
+        "rounds": int(rounds or 0),
+        "transaction": dict(replay_tx),
+        "recorded_by": "replay_backfill",
+    })
+    campaign["history"] = history[-50:]
+    if cost_available:
+        campaign["budget_spent_usd"] = round(
+            float(campaign.get("budget_spent_usd") or 0.0) + float(cost_usd), 6,
+        )
+    campaign["cycles_done"] = int(campaign.get("cycles_done") or 0) + 1
+    campaign["updated_at"] = utc_now_iso()
+    try:
+        return bool(_write_evolution_campaign(
+            campaign, expected_campaign_id=campaign_id, _state_lock_held=True,
+        ))
+    except Exception:
+        log.warning(
+            "Failed to backfill replayed cycle accounting for %s", task_id, exc_info=True,
+        )
+        return False
+
+
 def update_evolution_campaign_after_task(
     task_id: str,
     *,
@@ -921,6 +1008,24 @@ def update_evolution_campaign_after_task(
                     replay_tx = dict(existing_tx)
                     break
 
+        if metadata_tx_id and not replay_found:
+            # A transaction resolved by BOOT RECONCILIATION lands in
+            # ``transaction_history`` (that path appends the transaction but has no
+            # cycle cost/rounds to write, so it never creates a ``history`` row).
+            # Without this lookup the delayed terminal of such a cycle matches
+            # nothing and is rejected as transaction_mismatch — losing its
+            # accounting AND reporting a completed cycle as a failure.
+            for existing in list(campaign.get("transaction_history") or []):
+                if not isinstance(existing, dict):
+                    continue
+                if str(existing.get("transaction_id") or "") != metadata_tx_id:
+                    continue
+                if str(existing.get("task_id") or "") != str(task_id or ""):
+                    continue
+                replay_found = True
+                replay_tx = dict(existing)
+                break
+
         if not replay_found and not active_tx and not metadata_tx:
             # Preserve idempotency for old history-only records, but never let a
             # new metadata-less terminal mutate whichever campaign happens to be active.
@@ -937,6 +1042,18 @@ def update_evolution_campaign_after_task(
                     "accepted": False, "persisted": False, "replay": False,
                     "reason": "transaction_missing", "transaction": {},
                 }
+
+        if replay_found:
+            # A replayed terminal still owns its cycle's cost and rounds: the write
+            # that made this a replay (boot reconciliation) recorded the transition,
+            # not the cycle's accounting. Backfill whatever is missing, under the
+            # same lock, before returning the idempotent response.
+            _backfill_replay_cycle_accounting(
+                campaign, campaign_id, str(task_id or ""), replay_tx,
+                rounds=int(rounds or 0), cost_usd=cost_usd,
+                cost_accounting_status=cost_accounting_status,
+                outcome_axes=outcome_axes,
+            )
 
         if not replay_found:
             if (
@@ -971,11 +1088,17 @@ def update_evolution_campaign_after_task(
             has_rescue = bool(str(tx.get("rescue_ref") or "").strip())
             if has_commit and restart_verified:
                 tx["cycle_outcome"] = "absorbed"
-                campaign["absorbed_cycles_done"] = int(
-                    campaign.get("absorbed_cycles_done") or 0
-                ) + 1
+                # Same guard as both boot-reconcile sites: if boot reconciliation
+                # already counted this absorption, counting again here would
+                # double it. The transaction is the record of what was counted.
+                if not tx.get("absorbed_counted"):
+                    campaign["absorbed_cycles_done"] = int(
+                        campaign.get("absorbed_cycles_done") or 0
+                    ) + 1
+                    tx["absorbed_counted"] = True
                 append_unique_transaction(campaign, tx)
                 campaign.pop("active_transaction", None)
+                _close_post_task_backlog(campaign)
                 _clear_objective_repeat_count(campaign, tx)
             elif has_rescue:
                 tx["cycle_outcome"] = "abandoned"
@@ -1384,10 +1507,24 @@ def request_evolution_restart(drive_root: pathlib.Path, tx: Dict[str, Any], log:
         marker_path = pathlib.Path(drive_root) / "state" / "pending_restart_verify.json"
         existing = read_json_dict(marker_path) or {}
         existing_claim = existing.get("evolution_claim")
+        ours = isinstance(existing_claim, dict) and existing_claim == claim
+        if existing and not ours:
+            # Somebody else's restart is staged (the agent's own request_restart, or
+            # an earlier cycle's claim). Overwriting it would destroy the receipt
+            # that restart is verified against at boot — and the campaign's commit
+            # would then be checked against the WRONG expected_sha, which the boot
+            # path answers with a claim mismatch that blocks the next cycle. Leave
+            # it alone: the staged restart still happens, and this absorption is
+            # verified by boot reconciliation on the next generation.
+            if log is not None:
+                log.warning(
+                    "Evolution restart not staged: %s already holds a different restart "
+                    "receipt (reason=%s) — deferring to it",
+                    marker_path.name, str(existing.get("reason") or "unknown"),
+                )
+            return
         restart_reason = (
-            str(existing.get("reason") or "").strip()
-            if isinstance(existing_claim, dict) and existing_claim == claim
-            else ""
+            str(existing.get("reason") or "").strip() if ours else ""
         ) or "supervisor_auto_evolution_restart"
         atomic_write_json(
             marker_path,

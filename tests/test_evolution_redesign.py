@@ -678,6 +678,10 @@ def test_solve_capability_digest_joins_taskdone_and_resolution_rows(tmp_path):
     assert "ABSORBED: Harden the review loop" in digest
     assert "abc123def4" in digest  # commit sha shortened
     assert "NO_OP: Vague mega-refactor" in digest
+    # The task-done writer emits kind="cycle_outcome" as well, so the accounting
+    # has to be read from THAT row shape — reading it only in the non-cycle_outcome
+    # branch left the digest with no rounds/cost for any row we actually write.
+    assert "rounds=12" in digest and "cost=$2.50" in digest
 
     # Long objectives carry an explicit truncation marker (no silent [:N]).
     append_evolution_checkpoint(

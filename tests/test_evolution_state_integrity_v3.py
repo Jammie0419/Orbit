@@ -605,6 +605,167 @@ def test_duplicate_terminal_resumes_missing_restart_request(tmp_path, monkeypatc
     assert restart_calls == [(tmp_path, "a" * 40)]
 
 
+def test_replay_terminal_backfills_the_cycles_cost_and_rounds(tmp_path, monkeypatch):
+    """Boot reconciliation can absorb a transaction BEFORE its task terminal
+    arrives. That write resolves the transaction but has no cycle accounting, so
+    the delayed terminal used to match nothing: it was rejected as
+    transaction_mismatch and the cycle's rounds/cost never reached the campaign."""
+    from supervisor import evolution_lifecycle
+
+    campaign, tx = _active_transaction(tmp_path)
+    sha = "b" * 40
+    assert evolution_lifecycle.record_evolution_commit(
+        campaign["id"], tx["transaction_id"], tx["task_id"], sha,
+    )["ok"] is True
+    # Simulate the boot absorb: resolved + popped, with no history row.
+    live = evolution_lifecycle._read_evolution_campaign()
+    absorbed = dict(live["active_transaction"])
+    absorbed["cycle_outcome"] = "absorbed"
+    absorbed["absorbed_counted"] = True
+    evolution_lifecycle.append_unique_transaction(live, absorbed)
+    live["absorbed_cycles_done"] = int(live.get("absorbed_cycles_done") or 0) + 1
+    live.pop("active_transaction", None)
+    assert evolution_lifecycle._write_evolution_campaign(
+        live, expected_campaign_id=live["id"]) is True
+    assert evolution_lifecycle._read_evolution_campaign().get("history") in (None, [])
+
+    monkeypatch.setattr(
+        evolution_lifecycle, "_resume_evolution_terminal_effects",
+        lambda _campaign_id, _task_id, value: dict(value),
+    )
+
+    result = evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=1.25,
+        outcome_axes={"execution": {"status": "ok"}},
+        rounds=7,
+        transaction=tx,
+    )
+
+    assert result["replay"] is True, result
+    stored = evolution_lifecycle._read_evolution_campaign()
+    backfilled = [r for r in stored["history"] if r.get("recorded_by") == "replay_backfill"]
+    assert len(backfilled) == 1
+    assert backfilled[0]["rounds"] == 7
+    assert backfilled[0]["cost_usd"] == pytest.approx(1.25)
+    assert backfilled[0]["transaction"]["cycle_outcome"] == "absorbed"
+    assert stored["budget_spent_usd"] == pytest.approx(1.25)
+    assert stored["cycles_done"] == 1
+
+    # Idempotent: the same replay again must not append a second row.
+    again = evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=1.25,
+        outcome_axes={"execution": {"status": "ok"}},
+        rounds=7,
+        transaction=tx,
+    )
+    assert again["replay"] is True
+    stored = evolution_lifecycle._read_evolution_campaign()
+    assert len([r for r in stored["history"] if r.get("recorded_by") == "replay_backfill"]) == 1
+    assert stored["budget_spent_usd"] == pytest.approx(1.25)
+
+
+def test_replay_backfill_records_nothing_when_the_cycle_carried_no_accounting(
+    tmp_path, monkeypatch,
+):
+    """A replay with no rounds and no cost must stay a pure no-op rather than
+    appending an empty ledger row."""
+    from supervisor import evolution_lifecycle
+
+    campaign, tx = _active_transaction(tmp_path)
+    assert evolution_lifecycle.record_evolution_commit(
+        campaign["id"], tx["transaction_id"], tx["task_id"], "d" * 40,
+    )["ok"] is True
+    live = evolution_lifecycle._read_evolution_campaign()
+    absorbed = dict(live["active_transaction"])
+    absorbed["cycle_outcome"] = "absorbed"
+    evolution_lifecycle.append_unique_transaction(live, absorbed)
+    live.pop("active_transaction", None)
+    assert evolution_lifecycle._write_evolution_campaign(
+        live, expected_campaign_id=live["id"]) is True
+    monkeypatch.setattr(
+        evolution_lifecycle, "_resume_evolution_terminal_effects",
+        lambda _campaign_id, _task_id, value: dict(value),
+    )
+
+    result = evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"], cost_usd=None, outcome_axes={}, rounds=0, transaction=tx,
+    )
+
+    assert result["replay"] is True
+    stored = evolution_lifecycle._read_evolution_campaign()
+    assert not stored.get("history")
+
+
+def test_terminal_absorption_counts_once_and_closes_the_backlog(tmp_path, monkeypatch):
+    """The task-done absorption branch must match both boot-reconcile sites: one
+    absorption counted once, and the promoted backlog item closed. It previously
+    re-counted an already-counted absorption and left the item open forever."""
+    from supervisor import evolution_lifecycle
+
+    campaign, tx = _active_transaction(tmp_path)
+    sha = "e" * 40
+    assert evolution_lifecycle.record_evolution_commit(
+        campaign["id"], tx["transaction_id"], tx["task_id"], sha,
+    )["ok"] is True
+    tx = evolution_lifecycle._read_evolution_campaign()["active_transaction"]
+    tx["restart_verified"] = True
+    # Boot reconciliation already counted this absorption (its own guard set the
+    # flag), and the cycle addressed this promoted backlog item.
+    tx["absorbed_counted"] = True
+    evolution_lifecycle.set_evolution_campaign_fields(
+        active_transaction=tx, absorbed_cycles_done=1, post_task_backlog_id="ibl-abc123",
+    )
+    closed = []
+    monkeypatch.setattr(
+        "ouroboros.improvement_backlog.close_backlog_items",
+        lambda drive_root, ids=None, **kw: closed.extend(ids or []),
+    )
+
+    result = evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=0.5,
+        outcome_axes={"execution": {"status": "ok"}},
+        rounds=3,
+        transaction=tx,
+    )
+
+    assert result["persisted"] is True
+    stored = evolution_lifecycle._read_evolution_campaign()
+    assert stored["absorbed_cycles_done"] == 1, "an already-counted absorption must not count twice"
+    assert "post_task_backlog_id" not in stored
+    assert closed == ["ibl-abc123"]
+
+
+def test_evolution_restart_defers_to_a_foreign_staged_restart(tmp_path, monkeypatch):
+    """Overwriting somebody else's staged restart destroys the receipt that restart
+    gets verified against — the campaign's commit would then be checked against the
+    wrong expected_sha, which the boot path answers with a claim mismatch that
+    blocks the next cycle. The staged restart still happens; this absorption is
+    left to boot reconciliation."""
+    from supervisor import evolution_lifecycle, workers
+
+    campaign, tx = _active_transaction(tmp_path)
+    sha = "f" * 40
+    assert evolution_lifecycle.record_evolution_commit(
+        campaign["id"], tx["transaction_id"], tx["task_id"], sha,
+    )["ok"] is True
+    current_tx = evolution_lifecycle._read_evolution_campaign()["active_transaction"]
+    marker = tmp_path / "state" / "pending_restart_verify.json"
+    foreign = {"ts": "2026-09-02T00:00:00Z", "expected_sha": "9" * 40,
+               "reason": "agent_requested_restart"}
+    marker.write_text(json.dumps(foreign))
+    events = _CaptureQueue()
+    monkeypatch.setenv("OUROBOROS_EVOLUTION_AUTO_RESTART", "true")
+    monkeypatch.setattr(workers, "get_event_q", lambda: events)
+
+    evolution_lifecycle.request_evolution_restart(tmp_path, current_tx)
+
+    assert json.loads(marker.read_text()) == foreign, "the foreign restart must survive"
+    assert events.items == [], "no second restart may be queued over a staged one"
+
+
 def test_terminal_restart_preserves_exact_model_reason(tmp_path, monkeypatch):
     from supervisor import evolution_lifecycle, workers
 

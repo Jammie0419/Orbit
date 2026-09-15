@@ -32,9 +32,10 @@ def _drive(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def _write_tool_row(drive: pathlib.Path, task_id: str, tool: str, *,
-                    is_error: bool = False, status: str = "ok") -> None:
+                    is_error: bool = False, status: str = "ok",
+                    ts: str = "2026-09-02T00:00:00Z") -> None:
     row = {
-        "ts": "2026-09-02T00:00:00Z",
+        "ts": ts,
         "type": "tool_call",
         "tool": tool,
         "task_id": task_id,
@@ -137,6 +138,104 @@ def test_credit_fast_and_thrifty_rewards():
          "duration_ms": 5000, "tokens_used": 9000},
     ])
     assert creds[0]["credit"] > creds[1]["credit"]
+
+
+def test_credit_has_no_token_term():
+    """The tool log carries no per-step token count, so the document's thrifty
+    term could never be awarded. It was removed rather than left looking live: a
+    ``tokens_used`` field must not move a score.
+
+    Two otherwise-identical steps are compared, because a single step normalizes
+    to 1.0 and would hide the bonus entirely.
+    """
+    learner = TrajectoryExperienceLearner(pathlib.Path("."))
+    creds = learner.assign_credits([
+        {"step_id": 0, "tool": "a", "is_error": False, "duration_ms": 5000, "tokens_used": 10},
+        {"step_id": 1, "tool": "b", "is_error": False, "duration_ms": 5000, "tokens_used": 9000},
+    ])
+    assert creds[0]["credit"] == creds[1]["credit"], (
+        "tokens_used must not affect credit — the formula has no thrifty term"
+    )
+
+
+def test_load_task_steps_derives_step_latency_from_timestamps(tmp_path):
+    """duration_ms is the only timing signal available (the log has no per-step
+    duration field). Without deriving it the fast-credit term never fired."""
+    drive = _drive(tmp_path)
+    _write_tool_row(drive, "t1", "read_file", ts="2026-09-02T00:00:00+00:00")
+    _write_tool_row(drive, "t1", "edit_text", ts="2026-09-02T00:00:00.400000+00:00")
+    _write_tool_row(drive, "t1", "run_command", ts="2026-09-02T00:00:09+00:00")
+    _write_tool_row(drive, "t1", "read_file", ts="2026-09-02T00:00:09.100000+00:00")
+
+    learner = TrajectoryExperienceLearner(drive)
+    steps = learner.load_task_steps("t1")
+
+    assert "duration_ms" not in steps[0], "the first step has no predecessor to measure"
+    assert steps[1]["duration_ms"] == pytest.approx(400.0)
+    assert steps[2]["duration_ms"] == pytest.approx(8600.0)
+    assert steps[3]["duration_ms"] == pytest.approx(100.0)
+
+    credits = {c["step_id"]: c["credit"] for c in learner.assign_credits(steps)}
+    assert credits[1] > credits[2]  # fast step rewarded over the slow one
+
+
+def test_load_task_steps_ignores_a_malformed_timestamp(tmp_path):
+    drive = _drive(tmp_path)
+    _write_tool_row(drive, "t1", "read_file", ts="2026-09-02T00:00:00+00:00")
+    _write_tool_row(drive, "t1", "edit_text", ts="not-a-timestamp")
+    _write_tool_row(drive, "t1", "run_command", ts="2026-09-02T00:00:05+00:00")
+
+    steps = TrajectoryExperienceLearner(drive).load_task_steps("t1")
+
+    assert "duration_ms" not in steps[1], "unparseable ts must leave the field absent"
+    assert "duration_ms" not in steps[2], "no gap can span an unparseable row"
+
+
+def test_extract_task_experience_is_deduped_per_task(tmp_path):
+    """Track B is cursor-guarded; Track A was not — reprocessing a record stored
+    the same task's credits again and skewed the aggregates built from them."""
+    drive = _drive(tmp_path)
+    _write_tool_row(drive, "t1", "read_file")
+    _write_tool_row(drive, "t1", "run_command")
+    learner = TrajectoryExperienceLearner(drive)
+
+    first = learner.extract_task_experience("t1")
+    assert first is not None
+    assert learner.extract_task_experience("t1") is None
+
+    rows = [json.loads(l) for l in
+            (drive / "state" / "evolution_experiences.jsonl").read_text(encoding="utf-8").splitlines()
+            if l.strip()]
+    assert len([r for r in rows if r.get("kind") == "task"]) == 1
+
+
+def test_extract_task_experience_dedup_does_not_block_other_tasks(tmp_path):
+    drive = _drive(tmp_path)
+    _write_tool_row(drive, "t1", "read_file")
+    _write_tool_row(drive, "t2", "read_file")
+    learner = TrajectoryExperienceLearner(drive)
+
+    assert learner.extract_task_experience("t1") is not None
+    assert learner.extract_task_experience("t2") is not None
+    rows = [json.loads(l) for l in
+            (drive / "state" / "evolution_experiences.jsonl").read_text(encoding="utf-8").splitlines()
+            if l.strip()]
+    assert len([r for r in rows if r.get("kind") == "task"]) == 2
+
+
+def test_cycle_experiences_are_not_task_deduped(tmp_path):
+    """A cycle's idempotency is the consumption cursor, not task_id: the same
+    task_id re-entering through the cursor path must still be stored."""
+    drive = _drive(tmp_path)
+    learner = TrajectoryExperienceLearner(drive)
+    steps = [{"step_id": 0, "tool": "read_file", "is_error": False}]
+    first = learner.store_experience(
+        kind="cycle", task_id="c1", objective="o", outcome="absorbed",
+        steps=steps, overall={"summary": "x"})
+    second = learner.store_experience(
+        kind="cycle", task_id="c1", objective="o", outcome="absorbed",
+        steps=steps, overall={"summary": "x"})
+    assert first is not None and second is not None
 
 
 def test_critical_steps_top3_and_lowest2():

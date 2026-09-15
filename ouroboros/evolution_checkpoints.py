@@ -105,6 +105,21 @@ def build_solve_capability_digest(drive_root: pathlib.Path, *, max_entries: int 
             merged["abandoned_reason"] = str(row.get("abandoned_reason") or merged.get("abandoned_reason") or "")
             merged.setdefault("objective", str(row.get("campaign_objective") or ""))
             merged["commit_sha"] = str(row.get("commit_sha") or merged.get("commit_sha") or "")
+            # The task-done writer emits kind="cycle_outcome" TOO (schema-aligned
+            # with the later-resolution writer) and is the only one that carries
+            # the cycle's accounting. Reading rounds/cost only in the branch below
+            # left the digest with none of it — that branch is unreachable for
+            # every row we write. Guard on presence, so the later outcome row
+            # (which has no accounting) cannot erase what the task-done row set.
+            if row.get("rounds") is not None:
+                merged["rounds"] = int(row.get("rounds") or 0)
+            if row.get("cost_accounting_status"):
+                merged["cost_accounting_status"] = str(row.get("cost_accounting_status"))
+            if row.get("cost_usd") is not None:
+                merged["cost_usd"] = float(row.get("cost_usd"))
+            execution = (row.get("outcome_axes") or {}).get("execution") or {}
+            if execution:
+                merged["execution"] = str(execution.get("status") or "")
         else:
             tx = row.get("transaction") if isinstance(row.get("transaction"), dict) else {}
             # Task-done rows: a later cycle_outcome tag wins over the
