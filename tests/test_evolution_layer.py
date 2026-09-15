@@ -527,6 +527,16 @@ def test_apply_pending_request_attaches_plan_to_campaign(tmp_path, monkeypatch):
 
     monkeypatch.setattr("supervisor.evolution_lifecycle._read_evolution_campaign", _fake_read)
     monkeypatch.setattr("supervisor.evolution_lifecycle._write_evolution_campaign", _fake_write)
+
+    def _fake_set_fields(**fields):
+        # The plan is attached through the LOCKED field setter (which writes the
+        # real campaign file) — keep it in-memory here.
+        campaigned.update(fields)
+        wrote.update(fields)
+        return True
+
+    monkeypatch.setattr("supervisor.evolution_lifecycle.set_evolution_campaign_fields",
+                        _fake_set_fields)
     assert pte.apply_pending_request(drive) is True
     assert wrote.get("evolution_plan", {}).get("approach") == "Guard login parse"
 
