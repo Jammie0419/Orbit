@@ -613,6 +613,14 @@ def _apply_with_request(tmp_path, monkeypatch, backlog_id):
     )
     monkeypatch.setattr(lifecycle, "_read_evolution_campaign", lambda: camp)
     monkeypatch.setattr(lifecycle, "_write_evolution_campaign", lambda c: camp.update(c))
+
+    def _fake_set_fields(**fields):
+        # apply_pending_request links the backlog/plan through the LOCKED field
+        # setter (which writes the real campaign file) — keep it in-memory here.
+        camp.update(fields)
+        return True
+
+    monkeypatch.setattr(lifecycle, "set_evolution_campaign_fields", _fake_set_fields)
     monkeypatch.setattr(stt, "load_state", lambda: {"owner_chat_id": 7})
     monkeypatch.setattr(stt, "save_state", lambda s: None)
 
@@ -648,6 +656,34 @@ def test_v5_apply_pending_rejects_unknown_backlog_id(tmp_path, monkeypatch):
     ok, camp = _apply_with_request(tmp_path, monkeypatch, "ibl-does-not-exist")
     assert ok is True  # the objective still applies
     assert "post_task_backlog_id" not in camp  # but no bogus link is stored
+
+
+def test_set_evolution_campaign_fields_preserves_concurrent_writes(tmp_path, monkeypatch):
+    """The locked field setter must not clobber what a concurrent writer added.
+
+    The old unlocked read→mutate→write lost exactly this way, and a lost
+    commit_receipt is what leaves restart verification blocked forever.
+    """
+    import supervisor.evolution_lifecycle as lifecycle
+    import supervisor.queue as queue_mod
+    import supervisor.state as stt
+
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(queue_mod, "DRIVE_ROOT", tmp_path)
+    monkeypatch.setattr(stt, "STATE_LOCK_PATH", tmp_path / "locks" / "state.lock")
+    camp_path = tmp_path / lifecycle.EVOLUTION_CAMPAIGN_FILE
+    camp_path.write_text(json.dumps({
+        "id": "C", "status": "active",
+        # Landed by another writer AFTER any caller's stale read:
+        "active_transaction": {"commit_sha": "abc123", "commit_receipt": {"ok": True}},
+    }), encoding="utf-8")
+
+    assert lifecycle.set_evolution_campaign_fields(post_task_backlog_id="ibl-9") is True
+    after = json.loads(camp_path.read_text(encoding="utf-8"))
+    assert after["post_task_backlog_id"] == "ibl-9"
+    # The concurrent write survived — this is the regression being locked in.
+    assert after["active_transaction"]["commit_sha"] == "abc123"
+    assert after["active_transaction"]["commit_receipt"]["ok"] is True
 
 
 def test_v5_apply_pending_blocked_in_light_mode(tmp_path, monkeypatch):

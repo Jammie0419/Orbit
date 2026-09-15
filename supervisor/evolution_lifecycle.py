@@ -1306,6 +1306,50 @@ def clear_pending_owner_report(expected: Dict[str, Any]) -> bool:
         state.release_file_lock(state.STATE_LOCK_PATH, lock_fd)
 
 
+def set_evolution_campaign_fields(**fields: Any) -> bool:
+    """Set top-level campaign fields under the lock (safe read-modify-write).
+
+    Callers used to do ``camp = _read_evolution_campaign()`` → mutate →
+    ``_write_evolution_campaign(camp)`` with the READ outside the lock;
+    ``_write_evolution_campaign`` only CAS-checks the campaign id, so a
+    concurrent writer landing in that window was silently overwritten —
+    including ``active_transaction``/``commit_receipt``, whose loss is what
+    leaves restart verification blocked forever.
+
+    Lock order matches the rest of the supervisor: ``state.lock`` first, then
+    the campaign's own sidecar lock inside ``update_json_locked``.
+    """
+    from ouroboros.utils import update_json_locked
+    from supervisor import state
+
+    if not fields:
+        return True
+    path = _evolution_campaign_path()
+    state.assert_test_data_path(path)
+    lock_fd = state.acquire_file_lock(state.STATE_LOCK_PATH)
+    if lock_fd is None:
+        log.warning("evolution campaign field update skipped: state lock unavailable")
+        return False
+    applied = {"ok": False}
+
+    def _mutate(campaign: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(campaign, dict):
+            return None
+        campaign.update(fields)
+        campaign["updated_at"] = utc_now_iso()
+        applied["ok"] = True
+        return campaign
+
+    try:
+        update_json_locked(path, _mutate)
+        return bool(applied["ok"])
+    except Exception:
+        log.debug("evolution campaign field update failed", exc_info=True)
+        return False
+    finally:
+        state.release_file_lock(state.STATE_LOCK_PATH, lock_fd)
+
+
 def append_unique_transaction(campaign: Dict[str, Any], tx: Dict[str, Any]) -> None:
     tx_history = list(campaign.get("transaction_history") or [])
     tx_id = str(tx.get("transaction_id") or "")

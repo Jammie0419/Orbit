@@ -86,7 +86,40 @@ def _parse_every_n(cadence: str) -> int:
 
 
 def _counter_due(drive_root: pathlib.Path, k: int) -> bool:
+    """Advance the cadence counter and report whether this task is due.
+
+    The read-modify-write runs under the counter's sidecar lock: post-task hooks
+    run in daemon threads (one task finishing per thread), so an unguarded
+    get→increment→put loses increments — and can let two threads both observe
+    "due" for the same slot, firing two decisions/requests.
+
+    The counter is advisory bookkeeping, so a lock problem must not stall the
+    promotion decision: fall back to the legacy unlocked sequence with a warning.
+    """
     path = drive_root / _COUNTER_REL
+    outcome = {"due": False}
+
+    def _mutate(current: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        data = current if isinstance(current, dict) else {}
+        try:
+            n = int(data.get("n") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        n += 1
+        outcome["due"] = (n % max(1, k)) == 0
+        return {"n": n}
+
+    try:
+        from ouroboros.utils import update_json_locked
+
+        update_json_locked(path, _mutate)
+        return bool(outcome["due"])
+    except Exception:
+        log.warning(
+            "post_task_evolution: cadence counter lock failed — falling back to "
+            "unlocked update (a concurrent task may lose an increment)",
+            exc_info=True,
+        )
     n = 0
     try:
         if path.exists():
@@ -631,11 +664,11 @@ def apply_pending_request(drive_root: Any) -> bool:
                 backlog_id = ""
         if backlog_id:
             try:
-                from supervisor.evolution_lifecycle import _read_evolution_campaign, _write_evolution_campaign
+                from supervisor.evolution_lifecycle import set_evolution_campaign_fields
 
-                camp = _read_evolution_campaign()
-                camp["post_task_backlog_id"] = backlog_id
-                _write_evolution_campaign(camp)
+                # Locked read-modify-write: an unlocked read→write here could
+                # clobber a concurrent commit receipt / restart verification.
+                set_evolution_campaign_fields(post_task_backlog_id=backlog_id)
             except Exception:
                 pass
         # Evolution-layer plan (PAPER 不足 4+7): carry the worker-side planner's
@@ -644,11 +677,9 @@ def apply_pending_request(drive_root: Any) -> bool:
         evolution_plan = req.get("evolution_plan")
         if isinstance(evolution_plan, dict):
             try:
-                from supervisor.evolution_lifecycle import _read_evolution_campaign, _write_evolution_campaign
+                from supervisor.evolution_lifecycle import set_evolution_campaign_fields
 
-                camp = _read_evolution_campaign()
-                camp["evolution_plan"] = evolution_plan
-                _write_evolution_campaign(camp)
+                set_evolution_campaign_fields(evolution_plan=evolution_plan)
             except Exception:
                 pass
         from supervisor.state import update_state
