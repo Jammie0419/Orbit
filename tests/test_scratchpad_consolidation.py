@@ -61,6 +61,37 @@ def test_should_not_consolidate_missing_file(tmp_path):
     assert not mod.should_consolidate_scratchpad(mem)
 
 
+def test_should_consolidate_at_block_cap(tmp_path):
+    """The BLOCK CAP is its own trigger: with short blocks the store hits its FIFO
+    cap (evicting the oldest block) long before 30k chars accumulate, and evicted
+    content is never read back — so consolidation must fire at the cap."""
+    from ouroboros.memory import _SCRATCHPAD_MAX_BLOCKS
+
+    mod = _get_consolidator()
+    drive = tmp_path / "data"
+    (drive / "memory").mkdir(parents=True)
+    (drive / "logs").mkdir(parents=True)
+    mem = Memory(drive_root=drive)
+    for i in range(_SCRATCHPAD_MAX_BLOCKS):
+        mem.append_scratchpad_block("short note: " + "x" * 180, source="test")
+    blocks = mem.load_scratchpad_blocks()
+    assert len(blocks) == _SCRATCHPAD_MAX_BLOCKS
+    assert sum(len(b.get("content", "")) for b in blocks) < mod.SCRATCHPAD_CONSOLIDATION_THRESHOLD
+    assert mod.should_consolidate_scratchpad(mem) is True
+
+
+def test_should_not_consolidate_below_block_cap(tmp_path):
+    """A short, not-yet-full scratchpad must not be consolidated."""
+    mod = _get_consolidator()
+    drive = tmp_path / "data"
+    (drive / "memory").mkdir(parents=True)
+    (drive / "logs").mkdir(parents=True)
+    mem = Memory(drive_root=drive)
+    for i in range(4):
+        mem.append_scratchpad_block("short note: " + "y" * 180, source="test")
+    assert mod.should_consolidate_scratchpad(mem) is False
+
+
 def test_rebuild_knowledge_index_creates_index():
     """_rebuild_knowledge_index must create index-full.md with topic entries."""
     mod = _get_consolidator()

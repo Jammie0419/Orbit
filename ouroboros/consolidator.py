@@ -654,10 +654,32 @@ from ouroboros.context_budget import (
 )
 
 
+def _scratchpad_chars(blocks: List[Dict[str, Any]]) -> int:
+    return sum(len(b.get("content", "")) for b in blocks)
+
+
+def _needs_scratchpad_consolidation(blocks: List[Dict[str, Any]]) -> bool:
+    """Char threshold OR block cap — whichever binds first.
+
+    The char threshold alone never fires for SHORT blocks: the block store is
+    capped (FIFO, ``_SCRATCHPAD_MAX_BLOCKS``), so with ~300-char blocks the cap
+    evicts the oldest block long before 30k chars accumulate. Evicted blocks are
+    gone from working memory (the journal records their content but nothing reads
+    it back), so consolidation must fire at the cap to turn them into knowledge
+    BEFORE they drop.
+    """
+    if len(blocks) < 3:
+        return False
+    if _scratchpad_chars(blocks) > SCRATCHPAD_CONSOLIDATION_THRESHOLD:
+        return True
+    from ouroboros.memory import _SCRATCHPAD_MAX_BLOCKS
+
+    return len(blocks) >= _SCRATCHPAD_MAX_BLOCKS
+
+
 def should_consolidate_scratchpad(memory: Any) -> bool:
     try:
-        blocks = memory.load_scratchpad_blocks()
-        return len(blocks) >= 3 and sum(len(b.get("content", "")) for b in blocks) > SCRATCHPAD_CONSOLIDATION_THRESHOLD
+        return _needs_scratchpad_consolidation(memory.load_scratchpad_blocks())
     except Exception:
         return False
 
@@ -682,8 +704,8 @@ def _consolidate_scratchpad_blocks(
     llm_client: Any,
     identity_text: str,
 ) -> Optional[Dict[str, Any]]:
-    total_chars = sum(len(b.get("content", "")) for b in blocks)
-    if total_chars <= SCRATCHPAD_CONSOLIDATION_THRESHOLD:
+    total_chars = _scratchpad_chars(blocks)
+    if not _needs_scratchpad_consolidation(blocks):
         return None
 
     compress_count = max(2, len(blocks) // 2)
