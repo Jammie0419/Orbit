@@ -486,10 +486,10 @@ def generate_reflection(
         memory_actions = _validate_memory_actions(raw_memory_actions, task_id_str)
 
         # Reflection runs outside the tool-event loop; update budget directly.
-        if refl_usage:
+        if _refl_usage:
             try:
                 from supervisor.state import update_budget_from_usage
-                update_budget_from_usage(refl_usage)
+                update_budget_from_usage(_refl_usage)
             except Exception:
                 pass
     except Exception as e:
@@ -559,7 +559,13 @@ def apply_memory_actions(env: Any, actions: List[Dict[str, Any]], *, project_id:
                 from ouroboros.tools.registry import ToolContext
 
                 ctx = ToolContext(repo_dir=getattr(env, "repo_dir", env.drive_root), drive_root=env.drive_root, project_id=pid)
-                _knowledge_write(ctx, topic, content, mode="append")
+                result = _knowledge_write(ctx, topic, content, mode="append")
+                # _knowledge_write reports a refusal (bad/reserved topic, bad mode)
+                # by RETURNING a "⚠️ ..." string rather than raising — counting it as
+                # applied would hide a silently dropped fact behind a success count.
+                if str(result).startswith("⚠️"):
+                    log.warning("memory action: knowledge_write refused (topic=%r): %s", topic, result)
+                    continue
                 applied += 1
             elif atype == "identity_update_candidate":
                 from ouroboros.memory import Memory

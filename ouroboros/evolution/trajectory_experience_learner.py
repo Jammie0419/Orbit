@@ -193,12 +193,23 @@ class TrajectoryExperienceLearner:
 
     def identify_critical_steps(self, credits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Credit top-3 (the steps that carried the trace) + credit-lowest-2
-        (the steps that dragged it down)."""
+        (the steps that dragged it down).
+
+        Each returned step carries an explicit ``role`` ("key"/"drag") because
+        consumers previously had to re-derive it by membership in the *unsorted*
+        credit list — which mislabelled every step's role, since the top-3 is
+        picked from the credit-sorted order. The two sets never overlap (a short
+        trace yields fewer drags rather than duplicating a key step).
+        """
         if not credits:
             return []
         ordered = sorted(credits, key=lambda c: c["credit"], reverse=True)
-        critical = list(ordered[:3])
-        critical.extend(ordered[-2:])
+        n = len(ordered)
+        key_n = min(3, n)
+        drag_n = min(2, max(0, n - key_n))
+        critical = [{**c, "role": "key"} for c in ordered[:key_n]]
+        if drag_n:
+            critical.extend({**c, "role": "drag"} for c in ordered[-drag_n:])
         return critical
 
     @staticmethod
@@ -208,6 +219,37 @@ class TrajectoryExperienceLearner:
             if any(kw in text for kw in keywords):
                 return kind
         return "other"
+
+    @staticmethod
+    def canonical_objective_type(label: Any, objective: str = "") -> str:
+        """Coerce an arbitrary objective_type label into the classifier vocabulary.
+
+        Stored rows MUST use the same vocabulary ``classify_objective`` produces:
+        the similarity query re-derives the type from the objective TEXT, so a
+        free-form label from the extraction LLM ("bugfix", "Optimization") would
+        never match and the strategy digest would stay ``standard`` forever.
+        Unknown labels fall back to the keyword classifier — the text is the
+        ground truth, the model's label is only a hint.
+        """
+        raw = str(label or "").strip().lower()
+        raw = raw.replace("-", "_").replace(" ", "_")
+        aliases = {
+            "bugfix": "bug_fix", "bug_fixing": "bug_fix", "bug": "bug_fix",
+            "fix": "bug_fix", "fixes": "bug_fix", "error_fix": "bug_fix",
+            "perf": "performance", "optimization": "performance",
+            "optimisation": "performance", "speed": "performance", "perf_optimization": "performance",
+            "feature": "capability", "features": "capability",
+            "new_feature": "capability", "new_capability": "capability",
+            "refactoring": "refactor", "cleanup": "refactor",
+            "clean_up": "refactor", "improvement": "refactor",
+        }
+        if raw in _OBJECTIVE_TYPE_KEYWORDS:
+            return raw
+        if raw in aliases:
+            return aliases[raw]
+        if raw == "other":
+            return "other"
+        return TrajectoryExperienceLearner.classify_objective(objective)
 
     # ------------------------------------------------------------------ #
     # LLM experience extraction (degrades to placeholders on failure)
@@ -271,7 +313,12 @@ class TrajectoryExperienceLearner:
             )
             obj = _loose_json((resp.get("content") or "") if isinstance(resp, dict) else "")
             if obj:
-                obj.setdefault("objective_type", placeholder["objective_type"])
+                # The model frequently ignores the requested enum (returning
+                # "bugfix", "Bug Fix", "optimization", ...). Store the canonical
+                # vocabulary so the similarity query — which re-derives the type
+                # from the objective text — can actually match this row.
+                obj["objective_type"] = self.canonical_objective_type(
+                    obj.get("objective_type"), objective)
                 obj.setdefault("success_factors", [])
                 obj.setdefault("failure_factors", [])
                 obj.setdefault("reusable_pattern", "")
@@ -315,8 +362,18 @@ class TrajectoryExperienceLearner:
             "critical_steps": critical,
         }
         try:
-            append_jsonl(self.experiences_path, record)
+            # append_jsonl returns False (it does not raise) when all write
+            # retries fail — without this check the caller could not tell a lost
+            # experience from a landed one, and Track B would advance its cursor
+            # past the failed row and never retry it.
+            if not append_jsonl(self.experiences_path, record):
+                log.warning(
+                    "evolution layer: experience append failed — record dropped "
+                    "(kind=%s task=%s)", kind, task_id,
+                )
+                return None
             for c in critical:
+                # Derived ledger: best-effort, never fails the experience itself.
                 append_jsonl(self.credits_path, {
                     "ts": utc_now_iso(),
                     "kind": kind,
@@ -324,7 +381,7 @@ class TrajectoryExperienceLearner:
                     "step_id": c.get("step_id", 0),
                     "tool": str(c.get("tool") or ""),
                     "credit": c.get("credit", 0.0),
-                    "role": "key" if c in credits[:3] else "drag",
+                    "role": str(c.get("role") or "drag"),
                 })
             return record
         except Exception:
@@ -361,7 +418,10 @@ class TrajectoryExperienceLearner:
         obj_type = self.classify_objective(objective)
         similar = [
             exp for exp in self.load_experiences(kind=kind)
-            if (exp.get("overall") or {}).get("objective_type") == obj_type
+            if self.canonical_objective_type(
+                (exp.get("overall") or {}).get("objective_type"),
+                str(exp.get("objective") or ""),
+            ) == obj_type
         ]
         similar.sort(
             key=lambda exp: (
@@ -375,10 +435,16 @@ class TrajectoryExperienceLearner:
         self,
         objective: str,
         *,
-        kind: str = "cycle",
+        kind: Optional[str] = None,
         top_k: int = 5,
     ) -> Dict[str, Any]:
         """Strategy digest for the promotion decision / planner.
+
+        ``kind=None`` (default) draws on BOTH tracks: ``kind="task"`` (Track A —
+        the per-task traces) and ``kind="cycle"`` (Track B — completed evolution
+        cycles). Track A rows are stored under ``kind="task"``, so the old
+        default of ``"cycle"`` silently discarded every per-task experience and
+        pinned the digest at ``standard`` regardless of accumulated history.
 
         No similar history -> ``standard``; otherwise ``optimized`` with the
         accumulated success/failure patterns and the tools that carried
@@ -512,16 +578,27 @@ class TrajectoryExperienceLearner:
             steps = self.load_task_steps(cycle_task_id) if cycle_task_id else []
             objective = str(row.get("campaign_objective") or "")
             outcome = str(row.get("cycle_outcome") or "no_op")
-            # Only run LLM extraction when there is an actual trace to analyze
-            # (an empty trace still advances the cursor — nothing to learn).
+            # Only run LLM extraction when there is an actual trace to analyze.
+            # An empty trace still STORES a record — it carries the cycle's
+            # objective + outcome, which is the signal the strategy digest reads
+            # ("objectives of this class got absorbed / kept failing").
             overall = {}
             if steps:
                 overall = self._extract_overall(objective, outcome, steps, kind="cycle")
-            self.store_experience(
+            record = self.store_experience(
                 kind="cycle", task_id=cycle_task_id,
                 objective=objective, outcome=outcome,
                 steps=steps, overall=overall,
             )
+            # A failed write must NOT advance the cursor: the cursor never
+            # rewinds, so the cycle's experience would be lost permanently.
+            if record is None:
+                log.warning(
+                    "evolution layer: cycle experience NOT stored (seq=%s task=%s) — "
+                    "cursor held so the next pass retries",
+                    seq, cycle_task_id,
+                )
+                break
             stored += 1
             self._write_cursor(seq)
         return stored
