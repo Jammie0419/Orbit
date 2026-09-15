@@ -216,8 +216,6 @@ def _render_memory(view: RecordView, lines: List[str]) -> None:
     if view.memory_parse_failed:
         # Present-but-unparseable is data loss, not "the model wrote nothing".
         body.append("⚠ mem_parse_failed（MEMORY_ACTIONS_JSON 存在但不可解析，本记录未落库）")
-    if view.experience_delta or view.experience_total:
-        body.append(f"+{view.experience_delta} 经验（账本累计 {view.experience_total}）")
     backlog_items = _seq(view.backlog_items)
     if view.backlog_candidates or backlog_items:
         counts: dict = {}
@@ -238,6 +236,14 @@ def _render_memory(view: RecordView, lines: List[str]) -> None:
         mark = "✅" if view.skill_eligibility == "ok" else "—"
         body.append(f"技能资格 {mark} ({view.skill_eligibility})")
     _emit(lines, 4, body)
+
+
+def _render_experience(view: RecordView, lines: List[str]) -> None:
+    """④记忆 的尾段：经验入账。数据由 promote 那一趟产出（store_experience 在
+    maybe_promote 内），所以它只能跟后决策的那组一起发，不能留在前半边。"""
+    if not (view.experience_delta or view.experience_total):
+        return
+    _emit(lines, 4, [f"+{view.experience_delta} 经验（账本累计 {view.experience_total}）"])
 
 
 def _render_worthwhile(view: RecordView, lines: List[str]) -> None:
@@ -303,20 +309,42 @@ def render_record_start(view: RecordView) -> List[str]:
     return [render_record_header(view), f"{chip}{seeded}"]
 
 
-def render_record_block(view: RecordView) -> List[str]:
-    """The rest of one corpus record, grouped by the operators it exercised.
+def render_record_progress(view: RecordView) -> List[str]:
+    """What the record produced BEFORE the promotion decision (②执行 + ④记忆).
 
-    Starts at ②执行's continuation (the seed line came from render_record_start), so the
-    two halves never duplicate a line.
+    Emitted as soon as it exists: this half covers the reflection call, which is the
+    longest wait of a record on a slow provider. Buffering it until the block completes
+    made a live run look like it had produced nothing for minutes.
     """
     lines: List[str] = []
-    for render in (_render_execute, _render_attribute, _render_memory, _render_worthwhile,
-                   _render_plan, _render_behavioural_heredity):
+    _render_execute(view, lines)
+    _render_memory(view, lines)
+    return lines
+
+
+def render_record_tail(view: RecordView) -> List[str]:
+    """The post-decision operators: ③归因 ④记忆 ⑨遗传 ⑤触发 ⑥规划 ⑪沉淀.
+
+    The attribution credits, the experience bookings and the promotion verdict are all
+    produced by the promotion decision, so they can only be emitted after it returns.
+    """
+    lines: List[str] = []
+    for render in (_render_experience, _render_attribute, _render_worthwhile, _render_plan,
+                   _render_behavioural_heredity):
         render(view, lines)
     checkpoints = _seq(view.checkpoint_lines)
     if checkpoints:
         _emit(lines, 11, list(checkpoints))
     return lines
+
+
+def render_record_block(view: RecordView) -> List[str]:
+    """The whole record in one group (both halves, no header, no seed line).
+
+    The run emits the halves at their own moments — see render_record_progress/tail —
+    while this grouping stays for tests and for callers that want the record at once.
+    """
+    return render_record_progress(view) + render_record_tail(view)
 
 
 def render_evolution_event(*, cycle: Any, kind: str, detail: str, mark: str = "") -> str:

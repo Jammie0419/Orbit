@@ -260,3 +260,45 @@ def test_plan_line_is_absent_when_nothing_was_promoted():
         decision_kind="skip", decision_reason="cadence 1/5 未到期")))
     assert "⑥规划" not in text
     assert "⑤触发" in text
+
+
+def test_three_phase_emission_keeps_every_line_once():
+    """A record is emitted at three moments (start / pre-decision / post-decision)
+    so a slow provider cannot make the log look dead — and each datum must appear
+    exactly once across the three, at the moment it actually exists."""
+    view = _full_view()
+    start = leap_report.render_record_start(view)
+    progress = leap_report.render_record_progress(view)
+    tail = leap_report.render_record_tail(view)
+
+    # ① header + seed right after seeding
+    assert any("记录  5/11" in l for l in start)
+    assert any("轨迹播种 175 行" in l for l in start)
+    # ② reflection output + the memory writes that follow it, BEFORE the decision
+    assert any("轮次 155" in l for l in progress)
+    assert any("落库 1/1" in l for l in progress)
+    assert any("ibl-abc123" in l for l in progress)
+    # ③ the promotion decision and everything it produces, after it returns
+    assert any("信用 +2 步计分" in l for l in tail)
+    assert any("promote ✅" in l for l in tail)
+    assert any("经验（账本累计 11）" in l for l in tail)
+
+    # No line is duplicated between the halves and none is dropped.
+    all_lines = start + progress + tail
+    assert len(all_lines) == len(set(all_lines)), "a line was emitted twice"
+    joined = "\n".join(all_lines)
+    for datum in ("轨迹播种 175 行", "轮次 155", "落库 1/1", "backlog 候选 2",
+                  "技能资格 ✅ (ok)", "信用 +2 步计分", "Track-A", "经验（账本累计 11）",
+                  "promote ✅", "目标:", "技能生成", "checkpoints:"):
+        assert datum in joined, datum
+
+
+def test_experience_line_is_not_placed_before_it_exists():
+    """`+1 经验` is produced BY the promotion pass (store_experience runs inside
+    maybe_promote), so the pre-decision half must never carry it — that half is
+    emitted before the value exists."""
+    view = _full_view()
+    progress = "\n".join(leap_report.render_record_progress(view))
+    tail = "\n".join(leap_report.render_record_tail(view))
+    assert "经验" not in progress
+    assert "经验（账本累计 11）" in tail

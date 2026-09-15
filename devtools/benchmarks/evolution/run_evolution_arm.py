@@ -700,11 +700,11 @@ def cycle_count(data_root: pathlib.Path) -> int:
     return sum(1 for r in checkpoint_rows(data_root) if r.get("kind") == "cycle_outcome")
 
 
-def _emit_record_block(view: Any) -> None:
-    """Render one record's LEAP block. Display only: a rendering fault must never
-    reach the feeding path (the operators' work is already done by this point)."""
+def _emit_record_tail(view: Any) -> None:
+    """Render the post-decision half of one record. Display only: a rendering fault
+    must never reach the feeding path (the operators' work is already done)."""
     try:
-        for line in leap_report.render_record_block(view):
+        for line in leap_report.render_record_tail(view):
             _log(line)
     except Exception:  # noqa: BLE001 - display only
         pass
@@ -1669,6 +1669,7 @@ def main() -> int:
                 # record harvested (None = the fault preceded the first field).
                 _view = None
                 _start_emitted = False
+                _progress_emitted = False
                 _block_emitted = False
                 try:
                     # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
@@ -1740,6 +1741,11 @@ def main() -> int:
                         _added, touched = append_backlog_items_detailed(data_root, backlog)
                         _view.backlog_items = tuple(touched)
                     _view.backlog_candidates = len(backlog)
+                    # Emit the pre-decision half NOW: everything above is already final,
+                    # and the promotion decision below can take minutes of LLM time.
+                    _progress_emitted = True
+                    for _line in leap_report.render_record_progress(_view):
+                        _log(_line)
                     # [技能] 资格——与 pipeline 同一判据（eligibility_reason），benchmark
                     # 的 outcome_hint 为空（task_dict 不带 outcome），与实际调用一致。
                     try:
@@ -1863,7 +1869,7 @@ def main() -> int:
                     # ⑪沉淀：累计周期账本随本记录块一起渲染（与旧 checkpoints 行同一口径）。
                     _view.checkpoint_lines = tuple(checkpoint_block_lines(data_root))
                     _block_emitted = True
-                    _emit_record_block(_view)
+                    _emit_record_tail(_view)
                     # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
                     # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
                     # cadence 边界（见循环上方的 wait_for_campaign_completion）。
@@ -1888,8 +1894,14 @@ def main() -> int:
                     if _view is not None and not _start_emitted:
                         for _line in leap_report.render_record_start(_view):
                             _log(_line)
+                    if _view is not None and not _progress_emitted:
+                        try:
+                            for _line in leap_report.render_record_progress(_view):
+                                _log(_line)
+                        except Exception:  # noqa: BLE001 - display only
+                            pass
                     if _view is not None and not _block_emitted:
-                        _emit_record_block(_view)
+                        _emit_record_tail(_view)
                     _log(f"记录 {i:2d}/{len(corpus)} {rec['id']}: ✗ 失败: {exc}")
                     progress.setdefault("failures", []).append({"id": rec["id"], "error": str(exc)})
                 progress["last_index"] = i
