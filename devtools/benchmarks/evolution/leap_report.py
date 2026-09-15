@@ -444,9 +444,70 @@ def render_session_head(
     return lines
 
 
-def render_session_foot(*, arm: str, ledger_path: pathlib.Path, commits: str) -> List[str]:
-    """Session close: the tagged snapshot and the absorbed-commit lineage."""
-    return [
-        f"{step_glyph(11)}ledger: {ledger_path}",
-        f"{_cont(11)}吸收 commit（{arm}-evolved tag 相对起点）: {commits.strip() or '(无)'}",
+def render_ops(text: str, *, kind: str = "运行") -> str:
+    """A line that belongs to the RUN, not to a LEAP operator.
+
+    Waits, heartbeats and teardown actions used to be printed in the flat style, which
+    mixed two visual languages in one log and left the operator chips ambiguous.
+    """
+    return f" {kind}  ·  {text}"
+
+
+def render_campaign_heartbeat(*, elapsed: float, status: str) -> str:
+    """One liveness tick while waiting for a campaign."""
+    return render_ops(f"{int(elapsed)}s · {status}", kind="等待")
+
+
+def render_wait_outcome(outcome: str) -> str:
+    """The wait loop exiting. The outcome itself already has its ⑨遗传 transition line
+    (with the cycle number), so this only reports that the wait is over — repeating the
+    verdict here was the redundancy that made the tail read badly."""
+    return render_ops(f"战役收尾完成（{outcome or 'unknown'}）", kind="等待")
+
+
+def render_session_foot(
+    *, arm: str, ledger: dict, ledger_path: pathlib.Path, commits: str,
+) -> List[str]:
+    """⑪沉淀 — the session's closing summary (step 12 at session scope).
+
+    Replaces the two flat teardown lines: a session's outcome distribution, its
+    absorbed commits and where the durable record lives, in one block.
+    """
+    counts = ledger.get("cycle_outcome_counts") or {}
+    # "账本分布", not "周期": each cycle writes TWO checkpoint rows (task-done then
+    # resolution), so a raw count of the ledger keys overstates the cycle count. The
+    # authoritative per-outcome tallies are the three counters below it.
+    dist = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "（无）"
+    cont = _cont(11)
+    lines = [
+        block_header(f"会话收尾 · 臂 {arm}", width=54),
+        f"{step_glyph(11)}记录 {ledger.get('records_processed', 0)}/{ledger.get('corpus_completed', 0)}"
+        f" | 失败 {len(ledger.get('records_failed') or [])}",
+        f"{cont}吸收 {ledger.get('absorbed_count', 0)} | 放弃 {ledger.get('abandoned_count', 0)}"
+        f" | no_op {ledger.get('no_op_count', 0)} | 成本 ${ledger.get('total_cost_usd', 0)}",
+        f"{cont}账本分布 {dist}",
     ]
+    # Absorbed commits carry the subject when the clone history has it: the sha alone
+    # was duplicated by the lineage line below.
+    subjects = {}
+    for line in commits.strip().splitlines():
+        parts = line.split(" ", 1)
+        if parts and parts[0]:
+            subjects[parts[0]] = parts[1] if len(parts) > 1 else ""
+    shas = [str(s) for s in (ledger.get("absorbed_commit_shas") or []) if s]
+    if shas:
+        lines.append(f"{cont}吸收提交:")
+        for sha in shas:
+            # `git log --oneline` prints an abbreviated sha (8 chars here) while the
+            # ledger stores the full one: match by prefix either way.
+            subject = next(
+                (subj for key, subj in subjects.items() if sha.startswith(key)), ""
+            )
+            lines.append(f"{cont}  {sha[:12]}{('  ' + subject) if subject else ''}")
+    else:
+        lines.append(f"{cont}吸收提交: (无)")
+    head = str(ledger.get("session_clone_head") or "")
+    tag = str(ledger.get("tag") or "")
+    lines.append(f"{cont}clone {head} | tag {tag}")
+    lines.append(f"{cont}ledger: {ledger_path}")
+    return lines

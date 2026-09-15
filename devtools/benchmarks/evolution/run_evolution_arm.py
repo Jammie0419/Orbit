@@ -426,6 +426,7 @@ def wait_for_campaign_execution(data_root: pathlib.Path, server: IsolatedServer,
     tick = 0
     warned = False
     stale_ticks = 0
+    last_status = ""
     while time.time() - start < hard_cap:
         try:
             _campaign_transitions(data_root)
@@ -447,11 +448,14 @@ def wait_for_campaign_execution(data_root: pathlib.Path, server: IsolatedServer,
             _log(f"[等待] ⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在执行——继续等待"
                  f"（硬上限 {hard_cap:.0f}s）")
         tick += 1
+        # Heartbeat: only when something moved, plus a liveness line every 5 minutes.
+        # Five identical lines sat in one tail while the campaign waited for its restart.
         if tick % 6 == 0:
             try:
                 status = _campaign_live_status(data_root)
-                if status:
-                    _log(f"  [等待 {int(elapsed)}s] {status}")
+                if status and (status != last_status or tick % 30 == 0):
+                    last_status = status
+                    _log(leap_report.render_campaign_heartbeat(elapsed=elapsed, status=status))
             except Exception:  # noqa: BLE001 - display only
                 pass
         time.sleep(_WAIT_POLL_SECS)
@@ -487,6 +491,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
     tick = 0
     warned = False
     stale_ticks = 0
+    last_status = ""
     while time.time() - start < hard_cap:
         try:
             _campaign_transitions(data_root)
@@ -495,16 +500,10 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
         state = get_campaign_state(data_root)
         if state == CampaignState.IDLE:
             outcome = _campaign_last_outcome(data_root)
-            if outcome == "absorbed":
-                _log("[等待] 战役已吸收 ✅——继续处理")
-            elif outcome == "abandoned":
-                _log("[等待] 战役已放弃 ❌（未吸收，计入完成数）——继续处理")
-            elif outcome == "no_op":
-                _log("[等待] 战役 no_op（未提交）——继续处理")
-            elif outcome == "infra_failed":
-                _log("[等待] 战役因基础设施失败中止（未提交，不计入目标重复）——继续处理")
-            else:
-                _log("[等待] 战役已结束——继续处理")
+            # The verdict already has its ⑨遗传 transition line (with the cycle number):
+            # repeating it here, and claiming "继续处理" when the session is actually
+            # finishing, was what made the tail read badly.
+            _log(leap_report.render_wait_outcome(outcome))
             return
         # 死战役检测：无 commit 的 active_transaction + 队列空闲 + 无待消费请求
         # = 任务已死（如会话被中断），永远不会自己 resolve —— 不必等到超时。
@@ -528,8 +527,9 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
         if tick % 6 == 0:  # ~60s 心跳（战役可能跑 30-45 分钟）
             try:
                 status = _campaign_live_status(data_root)
-                if status:
-                    _log(f"  [等待 {int(elapsed)}s] {status}")
+                if status and (status != last_status or tick % 30 == 0):
+                    last_status = status
+                    _log(leap_report.render_campaign_heartbeat(elapsed=elapsed, status=status))
             except Exception:  # noqa: BLE001 - display only
                 pass
         time.sleep(_WAIT_POLL_SECS)
@@ -852,10 +852,9 @@ def _campaign_live_status(data_root: pathlib.Path, since_ts: str = "") -> str:
     errs = sum(1 for r in calls if "TOOL_ARG_ERROR" in str(r.get("result_preview") or ""))
     gate = (sum(1 for r in calls if "CORE_PROTECTION_BLOCKED" in str(r.get("result_preview") or ""))
             + sum(1 for r in calls if "RESTART_BLOCKED" in str(r.get("result_preview") or "")))
-    return (f"campaign: 进行中 tasks={len({r.get('task_id') for r in calls})} "
-            f"calls={len(calls)} edits={edits} shell={tests} "
-            f"commit={tools.get('commit_reviewed', 0)} arg_err={errs} gate_blk={gate} "
-            f"| 最近: {calls[-1].get('tool')}")
+    return (f"战役进行中 · 调用 {len(calls)} · 编辑 {edits} · shell {tests} "
+            f"· 提交 {tools.get('commit_reviewed', 0)} · 参数错 {errs} · 闸门拦 {gate} "
+            f"· 最近 {calls[-1].get('tool')}")
 
 
 _CAMPAIGN_SNAPSHOT: dict = {"campaign_id": "", "task_id": "", "commit_sha": "", "cycle": "?"}
@@ -1978,7 +1977,7 @@ def main() -> int:
         from ouroboros.llm import LLMClient
         consumed = TrajectoryExperienceLearner(data_root, llm_client=LLMClient()).consume_pending_cycles()
         if consumed:
-            _log(f"Track-B 补消费: {consumed} 个周期入账")
+            _log(leap_report.render_ops(f"Track-B 补消费: {consumed} 个周期入账"))
     except Exception as exc:  # noqa: BLE001 - backfill must not kill teardown
         _log(f"Track-B 补消费失败（不影响收尾）: {exc}")
 
@@ -2009,7 +2008,8 @@ def main() -> int:
     (session_dir / "session_ledger.json").write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
     for _line in leap_report.render_session_foot(
-        arm=args.arm, ledger_path=session_dir / "session_ledger.json", commits=commits
+        arm=args.arm, ledger=ledger, commits=commits,
+        ledger_path=session_dir / "session_ledger.json",
     ):
         _log(_line)
     if _LOG_FH is not None:

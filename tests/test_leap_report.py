@@ -222,14 +222,46 @@ def test_session_head_and_foot_carry_the_run_identity():
     assert "max=10" in head and "cadence 块大小=5" in head and "历史战役基线=2" in head
 
     foot = "\n".join(leap_report.render_session_foot(
-        arm="V3", ledger_path=pathlib.Path("/s/session_ledger.json"), commits="abc123 feat: x",
+        arm="V3",
+        ledger={"records_processed": 5, "corpus_completed": 11, "absorbed_count": 1,
+                "abandoned_count": 0, "no_op_count": 0, "total_cost_usd": 0,
+                "cycle_outcome_counts": {"absorbed": 1, "waiting_for_restart": 1},
+                "absorbed_commit_shas": ["b2f0c13f404c585994f33cfb94ef616af4af74c4"],
+                "session_clone_head": "b2f0c13f", "tag": "V3-evolved"},
+        ledger_path=pathlib.Path("/s/session_ledger.json"),
+        commits="b2f0c13f feat: add tool preflight checks",
     ))
+    assert "会话收尾 · 臂 V3" in foot
+    assert "记录 5/11 | 失败 0" in foot
+    assert "吸收 1 | 放弃 0 | no_op 0 | 成本 $0" in foot
+    assert "账本分布 absorbed=1, waiting_for_restart=1" in foot
+    # 吸收提交带 subject（短 sha 前缀匹配），不再重复 sha
+    assert "b2f0c13f404c  feat: add tool preflight checks" in foot
+    assert "clone b2f0c13f | tag V3-evolved" in foot
     assert "ledger: /s/session_ledger.json" in foot
-    assert "吸收 commit（V3-evolved tag 相对起点）: abc123 feat: x" in foot
+
     empty_foot = "\n".join(leap_report.render_session_foot(
-        arm="V3", ledger_path=pathlib.Path("/s/ledger.json"), commits="  ",
+        arm="V3", ledger={"absorbed_commit_shas": []},
+        ledger_path=pathlib.Path("/s/ledger.json"), commits="  ",
     ))
-    assert "(无)" in empty_foot
+    assert "吸收提交: (无)" in empty_foot
+
+
+def test_operational_lines_stay_out_of_the_operator_chips():
+    """Waits, heartbeats and teardown actions belong to the RUN, not to a LEAP
+    operator: chipping them (or leaving them flat) mixed two visual languages."""
+    hb = leap_report.render_campaign_heartbeat(
+        elapsed=890, status="战役进行中 · 调用 41 · 提交 4 · 最近 request_restart")
+    assert hb.startswith(" 等待  ·  890s · ")
+    for chip in ("②执行", "③归因", "④记忆", "⑤触发", "⑥规划", "⑦变异", "⑧选择", "⑨遗传", "⑪沉淀"):
+        assert chip not in hb
+
+    done = leap_report.render_wait_outcome("absorbed")
+    # 结局本身已有 ⑨遗传 的转换行（带周期号），这里只说"等待结束"，不重复判决
+    assert "战役收尾完成（absorbed）" in done
+    assert "继续处理" not in done
+
+    assert leap_report.render_ops("Track-B 补消费: 1 个周期入账").startswith(" 运行  ·  ")
 
 
 def test_render_never_raises_on_hostile_values():
