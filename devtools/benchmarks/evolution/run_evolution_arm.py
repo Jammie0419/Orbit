@@ -485,6 +485,32 @@ def count_started_campaigns(data_root: pathlib.Path) -> int:
     return len(history) + (1 if isinstance(tx, dict) and tx else 0)
 
 
+def session_budget_reached(data_root: pathlib.Path, baseline: int, max_absorbed: int) -> bool:
+    """Has this session started its full quota of campaigns?
+
+    ``baseline`` is the campaign count from before the session, so each session
+    (including --resume) gets a fresh budget.
+    """
+    if max_absorbed <= 0:
+        return False
+    return (count_started_campaigns(data_root) - baseline) >= max_absorbed
+
+
+def account_promoted_campaign(
+    data_root: pathlib.Path, baseline: int, *, start_timeout: float = 180,
+) -> int:
+    """Session campaign count after a promote decision, once the campaign exists.
+
+    The wait is the whole point. ``maybe_promote`` only writes the request; the
+    supervisor creates the campaign (and its transaction) asynchronously. Counting
+    straight after the decision reads the PRE-promotion value, so
+    ``count >= max_absorbed`` never holds and the session keeps feeding into the
+    next block (smoke_boundry_1: ``[战役] 第 0/1 个战役已提交请求``).
+    """
+    wait_for_campaign_start(data_root, timeout=start_timeout)
+    return count_started_campaigns(data_root) - baseline
+
+
 def parse_cadence_n(cadence: str) -> int:
     """Cadence N (every_n:N -> N). Fallback 5 for llm/off/unknown."""
     if cadence.startswith("every_n:"):
@@ -1629,12 +1655,20 @@ def main() -> int:
                         _log(f"[积累]   +{_exp_after - _exp_before} 经验 | 账本累计 {_exp_after}")
                     if decision:
                         _augment_request_contract(data_root)  # 战役执行契约注入 objective
-                        _session_campaigns = count_started_campaigns(data_root) - _campaigns_baseline
+                        # 战役异步创建，先等它出现再计数（否则读到旧值、上限永不触发）。
+                        _session_campaigns = account_promoted_campaign(
+                            data_root, _campaigns_baseline,
+                            start_timeout=max(60.0, min(float(args.campaign_timeout), 300.0)),
+                        )
                         _log(f"[战役]    第 {_session_campaigns}/{args.max_absorbed} 个战役已提交请求")
-                        if _session_campaigns >= args.max_absorbed:
-                            _log(f"达到战役上限 {args.max_absorbed}，停止喂料"
-                                 f"（剩余 {len(remaining) - pos} 条记录未处理）")
-                            _budget_reached = True  # break after progress save (resume-safe)
+                    # 上限判定独立于 decision：战役可能晚于 promote 决策出现，而
+                    # promote=False 的记录不会再进上面那个分支，只在里面判会漏掉复查。
+                    if not _budget_reached and session_budget_reached(
+                        data_root, _campaigns_baseline, args.max_absorbed
+                    ):
+                        _log(f"达到战役上限 {args.max_absorbed}，停止喂料"
+                             f"（剩余 {len(remaining) - pos} 条记录未处理）")
+                        _budget_reached = True  # break after progress save (resume-safe)
                     # [技能] 生成事件：diff 生成历史的新增行
                     _hist_after = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
                     if _hist_after > skillhist_before:
