@@ -302,7 +302,7 @@ def test_three_phase_emission_keeps_every_line_once():
     start = leap_report.render_record_start(view)
     progress = leap_report.render_record_progress(view)
     tail = leap_report.render_record_tail(view)
-    settle = leap_report.render_record_settle(view)
+    settle = leap_report.render_settle(view.checkpoint_lines)
 
     # ① header + seed right after seeding
     assert any("记录  5/11" in l for l in start)
@@ -373,7 +373,6 @@ def test_harness_emits_a_record_in_phases_not_as_one_block():
         "render_record_progress(_view)",
         "_emit_record_tail(_view)",
         "_campaign_transitions(data_root)",
-        "render_record_settle(_view)",
     ]
     positions = []
     for call in order:
@@ -381,12 +380,21 @@ def test_harness_emits_a_record_in_phases_not_as_one_block():
         assert index != -1, f"harness never calls {call}"
         positions.append(index)
     assert positions == sorted(positions), (
-        "record emission order must be start -> progress -> tail -> campaign -> settle, "
+        "record emission order must be start -> progress -> tail -> campaign, "
         f"found {order} at {positions}"
     )
     # The old one-shot emission must be gone, or the batching could silently return.
     assert "render_record_block(" not in source, (
         "main() must not emit the whole record in one call"
+    )
+    # ⑪沉淀 belongs to the cycle RESOLUTION (Algorithm 1 step 12 is the write that
+    # follows the outcome), so it is emitted from the transition path, not per record.
+    assert "render_record_settle(" not in source, (
+        "a record must not settle: its campaign may resolve a whole block later"
+    )
+    transitions = inspect.getsource(arm._campaign_transitions)
+    assert "render_settle(" in transitions, (
+        "the terminal transition must settle (⑪沉淀 follows the outcome)"
     )
 
 

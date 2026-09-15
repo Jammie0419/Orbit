@@ -345,18 +345,24 @@ def render_record_tail(view: RecordView) -> List[str]:
     return lines
 
 
-def render_record_settle(view: RecordView) -> List[str]:
+def render_settle(checkpoint_lines: Sequence[str]) -> List[str]:
     """⑪沉淀 — step 12, `M ← MemWrite(M, Δ, S, 结果)`.
 
-    Emitted AFTER the campaign transitions, not with the record's own operators: the
-    cumulative ledger it reports is the write that follows the cycle's mutation and
-    heredity (⑦⑧⑨), so rendering it first made the log read 沉淀 → 变异.
+    Emitted when a cycle RESOLVES (right after its ⑨遗传 terminal line), because that is
+    when the write it reports actually happens. Attaching it to the record that STARTED
+    the campaign printed the ledger as it stood before the cycle ran — for max>1 the
+    absorption happens a whole block later, so the line was both early and stale.
     """
-    checkpoints = _seq(view.checkpoint_lines)
     lines: List[str] = []
+    checkpoints = _seq(checkpoint_lines)
     if checkpoints:
         _emit(lines, 11, list(checkpoints))
     return lines
+
+
+def render_record_settle(view: RecordView) -> List[str]:
+    """⑪沉淀 for a caller that holds a view (see render_settle)."""
+    return render_settle(view.checkpoint_lines)
 
 
 def render_record_block(view: RecordView) -> List[str]:
