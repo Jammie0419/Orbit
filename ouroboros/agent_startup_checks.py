@@ -8,11 +8,18 @@ import pathlib
 import re
 import subprocess
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from ouroboros.utils import atomic_write_json, utc_now_iso, read_text, append_jsonl, read_json_dict, update_json_locked
 
 log = logging.getLogger(__name__)
+
+# Consecutive boot generations that may fail exact-commit-authority before the
+# open transaction is abandoned. A v2 transaction whose commit_receipt cannot be
+# authenticated must never be ABSORBED, but leaving it open forever blocks every
+# future cycle (the queue refuses to dispatch while active_tx carries a
+# commit_sha), so the stall has to be bounded.
+_RESTART_AUTHORITY_MAX_ATTEMPTS = 3
 
 
 def _is_release_tag(tag: str) -> bool:
@@ -649,7 +656,19 @@ def verify_restart(env: Any, git_sha: str) -> None:
             log.debug("Post-task backlog close-on-absorb failed", exc_info=True)
         campaign.pop("post_task_backlog_id", None)
 
-    def _commit_reachable(commit_sha: str, observed_sha: str) -> bool:
+    def _commit_reachable(commit_sha: str, observed_sha: str) -> Optional[bool]:
+        """Is ``commit_sha`` an ancestor of ``observed_sha``?
+
+        Tri-state, because "git could not tell us" is NOT the same as "not
+        reachable": the caller marks the cycle ``abandoned`` and bumps the
+        objective's repeat count on a False, so a transient git failure must not
+        be folded into that answer.
+
+        True  — reachable (identical, or an ancestor of the observed HEAD)
+        False — definitively not reachable (git ran and said so, or the commit
+                object is gone)
+        None  — undeterminable (repo unavailable/locked, probe timed out)
+        """
         if commit_sha and observed_sha and commit_sha == observed_sha:
             return True
         try:
@@ -662,9 +681,21 @@ def verify_restart(env: Any, git_sha: str) -> None:
                 text=True,
                 timeout=10,
             )
-            return result.returncode == 0
         except Exception:
+            return None
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            # Object exists, is not an ancestor — a definitive answer.
             return False
+        err = f"{result.stdout or ''}{result.stderr or ''}".lower()
+        # git words a missing object differently per subcommand: "not a valid
+        # object name", "not a valid commit name", "unknown revision".
+        if ("not a valid" in err) or ("unknown revision" in err):
+            # The commit object is genuinely absent (pruned/never landed).
+            return False
+        # Repo-level failure (not a git repository, corrupt index, ...): defer.
+        return None
 
     def _restart_authority_error(
         campaign: Dict[str, Any], tx: Dict[str, Any], *,
@@ -711,8 +742,10 @@ def verify_restart(env: Any, git_sha: str) -> None:
                 if isinstance(snapshot.get("active_transaction"), dict) else {}
             )
             snapshot_sha = str(snapshot_tx.get("commit_sha") or "").strip()
-            snapshot_reachable = bool(
-                snapshot_sha and _commit_reachable(snapshot_sha, observed_sha)
+            # Tri-state probe: None (undeterminable) is NOT "unreachable" — see
+            # _commit_reachable. _mutate defers the decision in that case.
+            snapshot_reachable = (
+                _commit_reachable(snapshot_sha, observed_sha) if snapshot_sha else False
             )
             # Reconcile AT MOST ONCE per server generation. A genuine restart
             # begins a new custody generation (NW-10 session id, which workers
@@ -771,25 +804,23 @@ def verify_restart(env: Any, git_sha: str) -> None:
                         return campaign
                     return None
                 now = utc_now_iso()
-                authority_error = _restart_authority_error(campaign, tx)
-                if authority_error:
+                if snapshot_reachable is None:
+                    # The git probe could not determine reachability (repo
+                    # unavailable / locked / probe timeout). Deciding here would
+                    # mark a possibly-successful commit as abandoned AND bump the
+                    # objective's repeat count (three such events pause the whole
+                    # objective). Leave the transaction open for a later boot.
                     campaign["last_boot_reconcile_gen"] = gen
-                    tx["restart_required"] = True
-                    tx["restart_verified"] = False
-                    tx["restart_authority_error"] = authority_error
-                    tx["restart_observed_sha"] = observed_sha
-                    tx["updated_at"] = now
-                    campaign["active_transaction"] = tx
-                    campaign["progress_notes"] = (
-                        "Restart reconciliation kept the evolution transaction open: "
-                        f"exact commit authority failed ({authority_error})."
-                    )
                     campaign["updated_at"] = now
+                    campaign["progress_notes"] = (
+                        "Restart reconciliation deferred: commit reachability "
+                        "undeterminable (git probe failed)."
+                    )
                     event.update({
                         "ts": now,
-                        "type": "evolution_tx_reconcile_blocked",
+                        "type": "evolution_tx_reconcile_deferred",
                         "ok": False,
-                        "reason": authority_error,
+                        "reason": "commit_reachability_undeterminable",
                         "campaign_id": str(campaign.get("id") or ""),
                         "transaction_id": str(tx.get("transaction_id") or ""),
                         "task_id": str(tx.get("task_id") or ""),
@@ -797,11 +828,68 @@ def verify_restart(env: Any, git_sha: str) -> None:
                         "observed_sha": observed_sha,
                     })
                     return campaign
+                authority_error = _restart_authority_error(campaign, tx)
+                effective_reachable = snapshot_reachable
+                abandon_reason = "commit_not_reachable_at_boot"
+                if authority_error:
+                    attempts = int(tx.get("restart_authority_failures") or 0) + 1
+                    tx["restart_authority_failures"] = attempts
+                    if attempts < _RESTART_AUTHORITY_MAX_ATTEMPTS:
+                        campaign["last_boot_reconcile_gen"] = gen
+                        tx["restart_required"] = True
+                        tx["restart_verified"] = False
+                        tx["restart_authority_error"] = authority_error
+                        tx["restart_observed_sha"] = observed_sha
+                        tx["updated_at"] = now
+                        campaign["active_transaction"] = tx
+                        campaign["progress_notes"] = (
+                            "Restart reconciliation kept the evolution transaction open: "
+                            f"exact commit authority failed ({authority_error}) "
+                            f"[attempt {attempts}/{_RESTART_AUTHORITY_MAX_ATTEMPTS}]."
+                        )
+                        campaign["updated_at"] = now
+                        event.update({
+                            "ts": now,
+                            "type": "evolution_tx_reconcile_blocked",
+                            "ok": False,
+                            "reason": authority_error,
+                            "attempts": attempts,
+                            "campaign_id": str(campaign.get("id") or ""),
+                            "transaction_id": str(tx.get("transaction_id") or ""),
+                            "task_id": str(tx.get("task_id") or ""),
+                            "commit_sha": commit_sha,
+                            "observed_sha": observed_sha,
+                        })
+                        return campaign
+                    # Escalate. The receipt cannot be recovered, and an OPEN
+                    # transaction carrying a commit_sha blocks every future cycle
+                    # (the queue refuses to dispatch), so the campaign would stall
+                    # forever. Abandon — never absorb without a valid receipt; the
+                    # commit itself stays on HEAD — and let the campaign continue.
+                    log.warning(
+                        "Restart authority failed %d times (%s) — abandoning the "
+                        "open evolution transaction so the campaign can continue",
+                        attempts, authority_error,
+                    )
+                    effective_reachable = False
+                    abandon_reason = f"restart_authority_unrecoverable:{authority_error}"
+                    event.update({
+                        "ts": now,
+                        "type": "evolution_tx_authority_escalated",
+                        "ok": False,
+                        "reason": authority_error,
+                        "attempts": attempts,
+                        "campaign_id": str(campaign.get("id") or ""),
+                        "transaction_id": str(tx.get("transaction_id") or ""),
+                        "task_id": str(tx.get("task_id") or ""),
+                        "commit_sha": commit_sha,
+                        "observed_sha": observed_sha,
+                    })
                 campaign["last_boot_reconcile_gen"] = gen
                 tx["restart_verified_at"] = now
                 tx["restart_observed_sha"] = observed_sha
                 tx["updated_at"] = now
-                if snapshot_reachable:
+                if effective_reachable:
                     tx["restart_required"] = False
                     tx["restart_verified"] = True
                     tx["verified_by"] = "boot_reconciliation"
@@ -824,7 +912,7 @@ def verify_restart(env: Any, git_sha: str) -> None:
                     tx["restart_verified"] = False
                     tx["cycle_outcome"] = "abandoned"
                     tx["abandoned_at"] = now
-                    tx["abandoned_reason"] = "commit_not_reachable_at_boot"
+                    tx["abandoned_reason"] = abandon_reason
                     _append_unique_transaction(campaign, tx)
                     campaign.pop("active_transaction", None)
                     campaign.pop("post_task_backlog_id", None)
@@ -832,7 +920,7 @@ def verify_restart(env: Any, git_sha: str) -> None:
                     _bump_objective_repeat_count(campaign, tx)  # BUG3: commit-but-never-absorbs counts
                     campaign["progress_notes"] = (
                         f"Restart reconciliation abandoned commit {commit_sha[:12]} "
-                        f"because observed HEAD {observed_sha[:12]} does not contain it."
+                        f"(reason: {abandon_reason}; observed HEAD {observed_sha[:12]})."
                     )
                     event_type, ok = "evolution_tx_abandoned", False
                 # WS-13.5 (e5): stage the owner absorb/abandon report (server delivers).
@@ -914,6 +1002,42 @@ def verify_restart(env: Any, git_sha: str) -> None:
             if authority_error:
                 now = utc_now_iso()
                 mark_error["reason"] = authority_error
+                attempts = int(tx.get("restart_authority_failures") or 0) + 1
+                tx["restart_authority_failures"] = attempts
+                if attempts >= _RESTART_AUTHORITY_MAX_ATTEMPTS:
+                    # Bounded escalation: the receipt cannot be recovered, and an
+                    # OPEN transaction carrying a commit_sha blocks every future
+                    # cycle (the queue refuses to dispatch), so the campaign would
+                    # stall forever. Abandon — never absorb without a valid
+                    # receipt; the commit itself stays on HEAD.
+                    log.warning(
+                        "Restart authority failed %d times (%s) — abandoning the "
+                        "open evolution transaction so the campaign can continue",
+                        attempts, authority_error,
+                    )
+                    tx["restart_required"] = False
+                    tx["restart_verified"] = False
+                    tx["cycle_outcome"] = "abandoned"
+                    tx["abandoned_at"] = now
+                    tx["abandoned_reason"] = (
+                        f"restart_authority_unrecoverable:{authority_error}"
+                    )
+                    tx["updated_at"] = now
+                    _append_unique_transaction(campaign, tx)
+                    campaign.pop("active_transaction", None)
+                    campaign.pop("post_task_backlog_id", None)
+                    from supervisor.evolution_lifecycle import _bump_objective_repeat_count
+                    _bump_objective_repeat_count(campaign, tx)
+                    campaign["progress_notes"] = (
+                        f"Restart verification abandoned commit {commit_sha[:12]} "
+                        f"after {attempts} authority failures ({authority_error})."
+                    )
+                    campaign["updated_at"] = now
+                    _record_pending_owner_report(campaign, tx)
+                    atomic_write_json(campaign_path, campaign, trailing_newline=True)
+                    mark_error["durable"] = "1"
+                    mark_error["reason"] = f"restart_authority_unrecoverable:{authority_error}"
+                    return False
                 if gen:
                     campaign["last_boot_reconcile_gen"] = gen
                 tx["restart_required"] = True
