@@ -161,10 +161,6 @@ def _render_execute(view: RecordView, lines: List[str]) -> None:
     body: List[str] = []
     if view.goal:
         body.append(f"目标: {_head(view.goal, 80)}")
-    if view.seed_error:
-        body.append(f"轨迹播种失败（不影响回放）: {_head(view.seed_error, 90)}")
-    else:
-        body.append(f"轨迹播种 {view.seeded} 行")
     markers = ",".join(str(m) for m in _seq(view.markers)) or "—"
     body.append(
         f"轮次 {view.rounds} | 错误 {view.error_count} | 标记 {markers}"
@@ -286,11 +282,34 @@ def _render_behavioural_heredity(view: RecordView, lines: List[str]) -> None:
     _emit(lines, 9, body)
 
 
+def render_record_header(view: RecordView) -> str:
+    """The block header: the "this record started" signal.
+
+    Emitted when the record STARTS, not with the rest of the block: the first thing a
+    record does is a reflection call that takes minutes on a slow provider, and a log
+    that stays silent from the provider probe until the block completes reads as a
+    stuck run (the flat log printed its header before that call).
+    """
+    return block_header(f"记录 {view.index:2d}/{view.total} · {view.record_id} (L{view.level})")
+
+
+def render_record_start(view: RecordView) -> List[str]:
+    """Header + what executing the record produced before the first LLM call."""
+    chip = step_glyph(2)
+    seeded = (
+        f"轨迹播种失败（不影响回放）: {_head(view.seed_error, 90)}" if view.seed_error
+        else f"轨迹播种 {view.seeded} 行"
+    )
+    return [render_record_header(view), f"{chip}{seeded}"]
+
+
 def render_record_block(view: RecordView) -> List[str]:
-    """One corpus record, grouped by the operators it exercised (Algorithm 1)."""
-    lines: List[str] = [
-        block_header(f"记录 {view.index:2d}/{view.total} · {view.record_id} (L{view.level})")
-    ]
+    """The rest of one corpus record, grouped by the operators it exercised.
+
+    Starts at ②执行's continuation (the seed line came from render_record_start), so the
+    two halves never duplicate a line.
+    """
+    lines: List[str] = []
     for render in (_render_execute, _render_attribute, _render_memory, _render_worthwhile,
                    _render_plan, _render_behavioural_heredity):
         render(view, lines)

@@ -50,10 +50,43 @@ def _full_view(**overrides):
     return leap_report.RecordView(**values)
 
 
+def _full_record_text(view=None):
+    """The whole record as the run prints it: the start half, then the rest.
+
+    They are emitted at different moments on purpose (the header must precede the
+    reflection call), so the information guard has to look at both.
+    """
+    view = view if view is not None else _full_view()
+    return "\n".join(leap_report.render_record_start(view) + leap_report.render_record_block(view))
+
+
+def test_record_start_carries_the_header_and_seed_line_before_any_llm_call():
+    """The header is the "this record started" signal: it must not wait for the
+    reflection call, or a slow provider makes the run look stuck."""
+    view = _full_view()
+    start = "\n".join(leap_report.render_record_start(view))
+    rest = "\n".join(leap_report.render_record_block(view))
+
+    assert "记录  5/11" in start and "2023_level2:35" in start
+    assert "轨迹播种 175 行" in start
+    assert "轨迹播种" not in rest, "the seed line belongs to the start half only"
+    assert "记录  5/11" not in rest, "the header is not repeated in the rest"
+    assert "轮次 155" in rest and "轮次 155" not in start
+
+
+def test_record_start_reports_a_seeding_failure_and_still_emits_the_rest():
+    view = _full_view(seeded=0, seed_error="corpus trace unreadable")
+    start = "\n".join(leap_report.render_record_start(view))
+    rest = "\n".join(leap_report.render_record_block(view))
+    assert "轨迹播种失败（不影响回放）: corpus trace unreadable" in start
+    assert "轨迹播种" not in rest
+    assert "⑤触发" in rest
+
+
 def test_record_block_keeps_every_datum_the_old_labels_carried():
     """The re-grouping must not lose information: every value the per-source labels
     used to print still appears (this is the guard for the whole refactor)."""
-    text = "\n".join(leap_report.render_record_block(_full_view()))
+    text = _full_record_text()
 
     # ②执行 — corpus seeding, the reflection's rounds/errors/markers/goal/summary
     assert "轨迹播种 175 行" in text
@@ -159,10 +192,8 @@ def test_evolution_event_operators_follow_the_loop():
 def test_missing_stages_are_omitted_not_padded():
     """A stage with no data contributes no line at all (no placeholder), while the
     stages that did run keep their chips."""
-    lines = leap_report.render_record_block(leap_report.RecordView(
-        index=1, total=1, record_id="t", seeded=7, rounds=2,
-    ))
-    text = "\n".join(lines)
+    view = leap_report.RecordView(index=1, total=1, record_id="t", seeded=7, rounds=2)
+    text = _full_record_text(view)
     assert "轨迹播种 7 行" in text
     assert "③归因" not in text and "⑤触发" not in text
     assert "⑨遗传" not in text and "⑪沉淀" not in text

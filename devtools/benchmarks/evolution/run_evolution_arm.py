@@ -1668,6 +1668,8 @@ def main() -> int:
                 # Bound before the try so the fault path can render whatever this
                 # record harvested (None = the fault preceded the first field).
                 _view = None
+                _start_emitted = False
+                _block_emitted = False
                 try:
                     # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
                     # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
@@ -1690,6 +1692,12 @@ def main() -> int:
                         seeded = 0
                     else:
                         _view.seeded = seeded
+                    # Header + seed line go out NOW: the next thing this record does is a
+                    # reflection call that can take minutes, and staying silent until the
+                    # block completes reads as a stuck run.
+                    _start_emitted = True
+                    for _line in leap_report.render_record_start(_view):
+                        _log(_line)
                     # 语料 trace 自带生产持久化的 trace_summary；空（旧语料）时才本地合成。
                     trace_summary = str(llm_trace.get("trace_summary") or "").strip()
                     if not trace_summary:
@@ -1854,6 +1862,7 @@ def main() -> int:
                         pass
                     # ⑪沉淀：累计周期账本随本记录块一起渲染（与旧 checkpoints 行同一口径）。
                     _view.checkpoint_lines = tuple(checkpoint_block_lines(data_root))
+                    _block_emitted = True
                     _emit_record_block(_view)
                     # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
                     # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
@@ -1875,8 +1884,11 @@ def main() -> int:
                         _milestone(data_root, i)
                 except Exception as exc:  # noqa: BLE001 - per-record fault isolation
                     # A record that faulted still reports what it harvested before the
-                    # fault (the block is display-only and was not emitted yet).
-                    if _view is not None:
+                    # fault — but only the half that was not emitted yet.
+                    if _view is not None and not _start_emitted:
+                        for _line in leap_report.render_record_start(_view):
+                            _log(_line)
+                    if _view is not None and not _block_emitted:
                         _emit_record_block(_view)
                     _log(f"记录 {i:2d}/{len(corpus)} {rec['id']}: ✗ 失败: {exc}")
                     progress.setdefault("failures", []).append({"id": rec["id"], "error": str(exc)})
