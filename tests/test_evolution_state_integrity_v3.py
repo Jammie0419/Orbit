@@ -2660,3 +2660,111 @@ def test_benchmark_seed_creates_campaign_before_enabling(tmp_path):
     assert campaign["status"] == "active"
     assert campaign["id"]
     assert state["evolution_mode_enabled"] is True
+
+
+def test_infra_failed_cycle_is_not_recorded_as_a_no_op(tmp_path, monkeypatch):
+    """A cycle killed by infrastructure never evaluated its objective, so it must not
+    be filed as the agent's own "nothing needed changing" verdict."""
+    from supervisor import evolution_lifecycle
+
+    _campaign, tx = _active_transaction(tmp_path)
+    monkeypatch.setattr(
+        evolution_lifecycle, "_resume_evolution_terminal_effects",
+        lambda _c, _t, value: dict(value),
+    )
+
+    result = evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=0.0,
+        outcome_axes={"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}},
+        rounds=60,
+        transaction=tx,
+    )
+
+    assert result["persisted"] is True
+    stored = evolution_lifecycle._read_evolution_campaign()
+    row = stored["history"][-1]
+    assert row["transaction"]["cycle_outcome"] == "infra_failed"
+    assert row["transaction"]["abandoned_reason"] == "infra:provider_unavailable"
+    # The cycle still happened (it consumed the quota) but it says nothing about the
+    # objective, so neither the repeat tally nor the dropped-objective flag moves.
+    assert stored.get("objective_repeat_counts") in (None, {})
+    assert not stored.get("dropped_objective_fps")
+
+
+def test_commit_less_cycle_that_reached_its_own_verdict_stays_a_no_op(tmp_path, monkeypatch):
+    """The distinction is the point: a cycle that ended on its own judgment (or on a
+    plain agent failure) is still a no_op AND still counts against the objective."""
+    from supervisor import evolution_lifecycle
+
+    _campaign, tx = _active_transaction(tmp_path)
+    monkeypatch.setattr(
+        evolution_lifecycle, "_resume_evolution_terminal_effects",
+        lambda _c, _t, value: dict(value),
+    )
+
+    evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=0.0,
+        outcome_axes={"execution": {"status": "ok", "reason_code": "final_message"}},
+        rounds=65,
+        transaction=tx,
+    )
+
+    stored = evolution_lifecycle._read_evolution_campaign()
+    row = stored["history"][-1]
+    assert row["transaction"]["cycle_outcome"] == "no_op"
+    fp = str(tx.get("objective_fp") or "")
+    assert fp and int(stored.get("objective_repeat_counts", {}).get(fp) or 0) == 1
+    assert fp in (stored.get("dropped_objective_fps") or [])
+
+
+def test_agent_failure_without_commit_is_still_a_no_op(tmp_path, monkeypatch):
+    """`failed` on the AGENT's side is not infrastructure: it is the objective being
+    attempted and not landing, which is exactly what the repeat cap exists for."""
+    from supervisor import evolution_lifecycle
+
+    _campaign, tx = _active_transaction(tmp_path)
+    monkeypatch.setattr(
+        evolution_lifecycle, "_resume_evolution_terminal_effects",
+        lambda _c, _t, value: dict(value),
+    )
+
+    evolution_lifecycle.update_evolution_campaign_after_task(
+        tx["task_id"],
+        cost_usd=0.0,
+        outcome_axes={"execution": {"status": "failed", "failure": {"kind": "agent"}}},
+        rounds=40,
+        transaction=tx,
+    )
+
+    stored = evolution_lifecycle._read_evolution_campaign()
+    assert stored["history"][-1]["transaction"]["cycle_outcome"] == "no_op"
+    assert int(stored.get("objective_repeat_counts", {}).get(str(tx.get("objective_fp")), 0) or 0) == 1
+
+
+def test_digest_lists_an_infra_failed_cycle_as_not_landed():
+    """The digest must show it (with its reason) instead of only counting it."""
+    from ouroboros.evolution_checkpoints import (
+        append_evolution_checkpoint,
+        build_solve_capability_digest,
+    )
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "memory").mkdir()
+        repo = root / "repo"
+        repo.mkdir()
+        append_evolution_checkpoint(
+            root, repo, task_id="evo-infra",
+            campaign={"id": "c1", "objective": "Add PDF handling"},
+            outcome_axes={"execution": {"status": "infra_failed"}}, cost_usd=0.0, rounds=60,
+            transaction={"transaction_id": "tx-infra", "commit_sha": "",
+                         "cycle_outcome": "infra_failed",
+                         "abandoned_reason": "infra:provider_unavailable"},
+        )
+        digest = build_solve_capability_digest(root)
+
+    assert "infra_failed=1" in digest
+    assert "INFRA_FAILED: Add PDF handling — infra:provider_unavailable" in digest

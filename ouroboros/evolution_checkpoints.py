@@ -102,7 +102,16 @@ def build_solve_capability_digest(drive_root: pathlib.Path, *, max_entries: int 
             order.append(task_id)
         if str(row.get("kind") or "") == "cycle_outcome":
             merged["cycle_outcome"] = str(row.get("cycle_outcome") or merged.get("cycle_outcome") or "")
-            merged["abandoned_reason"] = str(row.get("abandoned_reason") or merged.get("abandoned_reason") or "")
+            _row_tx = row.get("transaction") if isinstance(row.get("transaction"), dict) else {}
+            # The task-done writer carries the reason only inside ``transaction`` (the
+            # later-resolution writer also puts it at top level). A cycle settled by the
+            # terminal itself — no_op / infra_failed, or the rescue-abandoned path — has
+            # no resolution row, so without this fallback its reason never reaches the
+            # digest and the failure renders bare.
+            merged["abandoned_reason"] = str(
+                row.get("abandoned_reason") or _row_tx.get("abandoned_reason")
+                or merged.get("abandoned_reason") or ""
+            )
             merged.setdefault("objective", str(row.get("campaign_objective") or ""))
             merged["commit_sha"] = str(row.get("commit_sha") or merged.get("commit_sha") or "")
             # The task-done writer emits kind="cycle_outcome" TOO (schema-aligned
@@ -161,7 +170,10 @@ def build_solve_capability_digest(drive_root: pathlib.Path, *, max_entries: int 
                 extras.append(f"cost=${info['cost_usd']:.2f}")
             suffix = f" ({', '.join(extras)})" if extras else ""
             absorbed.append(f"- ABSORBED: {objective or '(objective unknown)'}{suffix}")
-        elif outcome in {"abandoned", "no_op"} and len(failed) < 4:
+        elif outcome in {"abandoned", "no_op", "infra_failed"} and len(failed) < 4:
+            # infra_failed belongs here rather than in the counts only: it is a cycle
+            # that did NOT land, and its reason (infra:provider_unavailable) is the
+            # whole point of labelling it apart from a deliberate no_op.
             reason = str(info.get("abandoned_reason") or "").strip()
             suffix = f" — {reason}" if reason else ""
             failed.append(f"- {outcome.upper()}: {objective or '(objective unknown)'}{suffix}")

@@ -501,6 +501,8 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
                 _log("[等待] 战役已放弃 ❌（未吸收，计入完成数）——继续处理")
             elif outcome == "no_op":
                 _log("[等待] 战役 no_op（未提交）——继续处理")
+            elif outcome == "infra_failed":
+                _log("[等待] 战役因基础设施失败中止（未提交，不计入目标重复）——继续处理")
             else:
                 _log("[等待] 战役已结束——继续处理")
             return

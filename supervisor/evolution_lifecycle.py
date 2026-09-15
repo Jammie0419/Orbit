@@ -941,6 +941,33 @@ def _backfill_replay_cycle_accounting(
         return False
 
 
+# Execution statuses that say the cycle died of infrastructure rather than of a judgment
+# about the objective. `provider` failure kinds are folded in by the helper below.
+_INFRA_EXECUTION_STATUSES = frozenset({"infra_failed", "cancelled", "interrupted"})
+
+
+def _infra_failure_reason(axes: Optional[Dict[str, Any]]) -> str:
+    """Non-empty when this cycle's outcome says nothing about its objective.
+
+    ``outcome_axes.execution`` is the SSOT for HOW a task ended (``ouroboros/outcomes.py``);
+    ``status="infra_failed"`` / ``failure.kind="provider"`` / a cancelled or interrupted
+    cycle are all cases where the objective was never actually evaluated. Empty means the
+    cycle reached its own verdict, so a commit-less end is a genuine ``no_op``.
+    """
+    execution = (axes or {}).get("execution") if isinstance(axes, dict) else None
+    if not isinstance(execution, dict):
+        return ""
+    failure = execution.get("failure") if isinstance(execution.get("failure"), dict) else {}
+    status = str(execution.get("status") or "")
+    kind = str(failure.get("kind") or "")
+    if status not in _INFRA_EXECUTION_STATUSES and kind != "provider":
+        return ""
+    return str(
+        execution.get("reason_code") or failure.get("reason") or failure.get("detail")
+        or kind or status
+    )
+
+
 def update_evolution_campaign_after_task(
     task_id: str,
     *,
@@ -1109,14 +1136,25 @@ def update_evolution_campaign_after_task(
                 campaign.pop("post_task_backlog_id", None)
                 _bump_objective_repeat_count(campaign, tx)
             elif not has_commit:
-                tx["cycle_outcome"] = "no_op"
+                # A commit-less cycle is NOT automatically "the agent concluded nothing
+                # needed changing": when the cycle died of an infrastructure failure
+                # (provider gone, session cancelled/interrupted) the objective was never
+                # evaluated, so it is evidence about NOTHING. Both the repeat tally and
+                # the dropped-objective flag would otherwise let a provider outage pause
+                # the objective (OBJECTIVE_REPEAT_CAP) or retire it from the chooser.
+                infra_reason = _infra_failure_reason(axes)
+                tx["cycle_outcome"] = "infra_failed" if infra_reason else "no_op"
                 tx["restart_required"] = False
                 tx["recovery_hint"] = ""
                 tx["cleanup_status"] = "pending"
+                if infra_reason:
+                    # Same slot the digest/owner report render as "why this did not land".
+                    tx["abandoned_reason"] = f"infra:{infra_reason}"
                 append_unique_transaction(campaign, tx)
                 campaign.pop("active_transaction", None)
                 campaign.pop("post_task_backlog_id", None)
-                _bump_objective_repeat_count(campaign, tx)
+                if not infra_reason:
+                    _bump_objective_repeat_count(campaign, tx)
             else:
                 tx["cycle_outcome"] = "waiting_for_restart"
                 tx["recovery_hint"] = tx.get("recovery_hint") or (

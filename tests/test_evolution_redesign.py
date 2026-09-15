@@ -172,7 +172,8 @@ def test_evolution_task_completion_preserves_live_transaction_updates(tmp_path):
     campaign = queue.get_evolution_status_snapshot()["campaign"]
     assert "active_transaction" not in campaign
     assert campaign["transaction_history"][-1]["task_id"] == "task2"
-    assert campaign["transaction_history"][-1]["cycle_outcome"] == "no_op"
+    # An infra failure is NOT the agent's "nothing needed changing" verdict.
+    assert campaign["transaction_history"][-1]["cycle_outcome"] == "infra_failed"
 
 
 def test_terminal_evolution_event_without_running_metadata_updates_transaction(tmp_path):
@@ -220,7 +221,8 @@ def test_terminal_evolution_event_without_running_metadata_updates_transaction(t
     assert campaign["history"][0]["transaction"]["transaction_id"] == tx["transaction_id"]
     assert "active_transaction" not in campaign
     assert campaign["transaction_history"][-1]["task_id"] == "task-cancel"
-    assert campaign["transaction_history"][-1]["cycle_outcome"] == "no_op"
+    # A cancelled cycle never evaluated its objective — same reasoning as infra_failed.
+    assert campaign["transaction_history"][-1]["cycle_outcome"] == "infra_failed"
     assert len(campaign["history"]) == 1
     assert campaign["cycles_done"] == 1
     assert int(supervisor_state.load_state().get("evolution_consecutive_failures") or 0) == 1
