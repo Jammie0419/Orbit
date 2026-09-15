@@ -1810,7 +1810,10 @@ def main() -> int:
                         pass
                     _log(f"[记录 {i:2d}/{len(corpus)}] {rec['id']}: 反思{len(str(reflection_entry.get('reflection', '')))}字 "
                          f"rounds={usage_dict.get('rounds')} mem={len(mem_actions)} "
-                         f"backlog={len(backlog)} seed={seeded} promote={bool(decision)}")
+                         # A present-but-unparseable block yields mem=0 as well; say so,
+                         # or the loss is invisible in the run's own artifacts.
+                         + ("mem_parse_failed " if reflection_entry.get("memory_actions_parse_failed") else "")
+                         + f"backlog={len(backlog)} seed={seeded} promote={bool(decision)}")
                     # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
                     # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
                     # cadence 边界（见循环上方的 wait_for_campaign_completion）。

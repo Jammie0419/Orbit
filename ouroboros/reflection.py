@@ -309,6 +309,78 @@ _ALLOWED_MEMORY_ACTION_TYPES = frozenset({
 })
 
 
+_JSON_ESCAPE_CHARS = frozenset('"\\/bfnrtu')
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _repair_invalid_json_escapes(payload: str) -> tuple[str, list]:
+    """Make an almost-JSON payload decodable instead of discarding the whole block.
+
+    Models writing about regexes, shell pipelines or Windows paths routinely emit a
+    bare ``\\d`` / ``\\s`` / ``\\U`` inside a JSON string, and they routinely emit
+    raw newlines inside one too. The array is otherwise exactly what was asked for,
+    yet strict decoding rejects the WHOLE block over a single character — and a
+    dropped ``MEMORY_ACTIONS_JSON`` silently loses that record's memory writes.
+
+    Illegal backslashes are doubled (the evident intent: a literal backslash) and
+    raw control characters are escaped; legal escapes are copied through untouched.
+
+    Returns ``(repaired, inserted_positions)`` where each position is the index IN
+    THE REPAIRED STRING of a character with no counterpart in the original, so a
+    caller can map a decoded end offset back onto the original text.
+    """
+    out: list = []
+    inserted: list = []
+    changed = False
+    in_string = False
+    i = 0
+    length = len(payload)
+    while i < length:
+        ch = payload[i]
+        if not in_string:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            in_string = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch < " " or ch == "\x7f":
+            # A RAW control character inside a string (models emit real newlines):
+            # equally fatal to strict decoding, equally repairable.
+            out.append("\\")
+            out.append({"\n": "n", "\r": "r", "\t": "t", "\x0b": "u000b",
+                        "\x0c": "f", "\x7f": "u007f"}.get(ch, "u%04x" % ord(ch)))
+            inserted.append(len(out) - 1)
+            changed = True
+            i += 1
+            continue
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        nxt = payload[i + 1] if i + 1 < length else ""
+        valid = nxt in _JSON_ESCAPE_CHARS and nxt != ""
+        if valid and nxt == "u":  # \uXXXX only when four hex digits follow
+            valid = all(c in _HEX_DIGITS for c in payload[i + 2:i + 6]) and i + 6 <= length
+        if valid:
+            out.append(ch)
+            out.append(nxt)
+            i += 2
+            continue
+        # Illegal escape (or a trailing backslash): keep the backslash the model
+        # meant and escape it for the parser.
+        out.append("\\")
+        out.append("\\")
+        inserted.append(len(out) - 1)
+        changed = True
+        i += 1
+    return ("".join(out), inserted) if changed else (payload, [])
+
+
 def _extract_trailing_json(text: str, marker: str) -> tuple[str, Optional[list]]:
     """Peel a ``MARKER: [...]`` block out of *text* regardless of its position.
 
@@ -330,8 +402,21 @@ def _extract_trailing_json(text: str, marker: str) -> tuple[str, Optional[list]]
     try:
         value, end = json.JSONDecoder().raw_decode(stripped)
     except Exception:
-        log.warning("Reflection %s JSON parse failed", marker, exc_info=True)
-        return text[:idx].rstrip(), None
+        # One illegal backslash used to discard the whole block (and with it the
+        # record's memory actions). Repair the escapes and retry before giving up.
+        repaired, inserted = _repair_invalid_json_escapes(stripped)
+        if not inserted:
+            log.warning("Reflection %s JSON parse failed", marker, exc_info=True)
+            return text[:idx].rstrip(), None
+        try:
+            value, end = json.JSONDecoder().raw_decode(repaired)
+        except Exception:
+            log.warning("Reflection %s JSON parse failed (after escape repair)", marker, exc_info=True)
+            return text[:idx].rstrip(), None
+        # `end` indexes the REPAIRED text; shift it back so the remainder slices the
+        # original (inserted chars before the end have no original counterpart).
+        end -= sum(1 for pos in inserted if pos < end)
+        log.info("Reflection %s: repaired %d invalid JSON escape(s)", marker, len(inserted))
     remainder = (text[:idx] + after[lead + end:]).rstrip()
     return remainder, value if isinstance(value, list) else None
 
@@ -484,6 +569,13 @@ def generate_reflection(
                     "kind": _truncate_with_notice(raw.get("kind", "improvement"), 40).strip() or "improvement",
                 })
         memory_actions = _validate_memory_actions(raw_memory_actions, task_id_str)
+        # A PRESENT-but-unparseable block must not look like "the model chose to
+        # write nothing": the P1 rule is that a gap is represented, never filled in
+        # (smoke_boundry_3 lost a record's memory writes to one illegal backslash,
+        # and `memory_actions: []` was indistinguishable from a deliberate empty).
+        memory_actions_parse_failed = (
+            raw_memory_actions is None and "MEMORY_ACTIONS_JSON:" in body_after_backlog
+        )
 
         # Reflection runs outside the tool-event loop; update budget directly.
         if _refl_usage:
@@ -497,6 +589,7 @@ def generate_reflection(
         reflection_text = f"(reflection generation failed: {e})"
         backlog_candidates = []
         memory_actions = []
+        memory_actions_parse_failed = False
 
     return {
         "ts": utc_now_iso(),
@@ -515,6 +608,9 @@ def generate_reflection(
         "reflection": reflection_text,
         "backlog_candidates": backlog_candidates,
         "memory_actions": memory_actions,
+        # Only when it happened: an absent marker and a broken payload both yield
+        # no actions, and only the caller-side audit can tell them apart later.
+        **({"memory_actions_parse_failed": True} if memory_actions_parse_failed else {}),
     }
 
 

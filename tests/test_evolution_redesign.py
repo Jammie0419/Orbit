@@ -1331,3 +1331,100 @@ def test_toggle_evolution_tool_blocked_in_light_mode(monkeypatch):
 
     assert state.get("evolution_mode_enabled") is not True
     assert sent and "light" in sent[0][1].lower()
+
+
+def test_reflection_extract_trailing_json_repairs_illegal_escapes():
+    """A single illegal backslash (\\d from a regex, \\U from a path) used to
+    discard the WHOLE block and with it the record's memory writes."""
+    from ouroboros.reflection import _extract_trailing_json
+
+    text = (
+        "Body text.\n"
+        'MEMORY_ACTIONS_JSON: [{"type": "scratchpad_append", "content": "regex \\d+ and C:\\Users"}]\n'
+        'BACKLOG_CANDIDATES_JSON: [{"summary": "s"}]'
+    )
+    body, memory = _extract_trailing_json(text, "MEMORY_ACTIONS_JSON:")
+
+    assert memory == [{
+        "type": "scratchpad_append",
+        "content": "regex \\d+ and C:\\Users",
+    }]
+    # The remainder must still slice the ORIGINAL: the repair inserts characters,
+    # so an unshifted offset would eat the following marker.
+    assert "BACKLOG_CANDIDATES_JSON" in body
+    assert "MEMORY_ACTIONS_JSON" not in body
+    _rest, backlog = _extract_trailing_json(body, "BACKLOG_CANDIDATES_JSON:")
+    assert backlog == [{"summary": "s"}]
+
+
+def test_reflection_extract_trailing_json_repairs_raw_control_characters():
+    """Models also emit real newlines/tabs inside a JSON string."""
+    from ouroboros.reflection import _extract_trailing_json
+
+    text = 'Body.\nMEMORY_ACTIONS_JSON: [{"type": "scratchpad_append", "content": "line1\nline2\tend"}]'
+    _body, memory = _extract_trailing_json(text, "MEMORY_ACTIONS_JSON:")
+
+    assert memory == [{"type": "scratchpad_append", "content": "line1\nline2\tend"}]
+
+
+def test_reflection_extract_trailing_json_leaves_valid_payloads_alone():
+    """Legal escapes must go through untouched (no rewrite, no mangling)."""
+    from ouroboros.reflection import _extract_trailing_json
+
+    content = 'quote \\" slash \\\\ newline \\n unicode \\u00e9'
+    text = f'Body.\nMEMORY_ACTIONS_JSON: [{{"type": "scratchpad_append", "content": "{content}"}}]'
+
+    _body, memory = _extract_trailing_json(text, "MEMORY_ACTIONS_JSON:")
+
+    assert memory == [{"type": "scratchpad_append", "content": 'quote " slash \\ newline \n unicode é'}]
+
+
+def test_reflection_extract_trailing_json_still_reports_broken_payloads():
+    """Repair must not invent actions: a payload that is broken for other reasons
+    still returns None so the caller can treat it as a parse failure."""
+    from ouroboros.reflection import _extract_trailing_json
+
+    text = 'Body.\nMEMORY_ACTIONS_JSON: [{"type": "x",,}]'
+    assert _extract_trailing_json(text, "MEMORY_ACTIONS_JSON:")[1] is None
+    assert _extract_trailing_json('Body.\nMEMORY_ACTIONS_JSON: not json at all',
+                                  "MEMORY_ACTIONS_JSON:")[1] is None
+
+
+def test_generate_reflection_marks_an_unparseable_memory_block():
+    """An absent marker and a broken payload both yield no actions. Only the broken
+    one is data loss, so the entry must say which it was (P1: represent the gap)."""
+    from unittest.mock import MagicMock
+
+    from ouroboros.reflection import generate_reflection
+
+    def _entry(content):
+        llm = MagicMock()
+        llm.chat.return_value = (
+            {"content": content}, {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.0},
+        )
+        return generate_reflection(
+            task={"id": "t1", "text": "goal"}, llm_trace={"tool_calls": []},
+            trace_summary="", llm_client=llm, usage_dict={"rounds": 1, "cost": 0.0},
+        )
+
+    broken = 'Reflection body.\nMEMORY_ACTIONS_JSON: [{"type":,}]'
+    entry = _entry(broken)
+    assert entry["memory_actions"] == []
+    assert entry["memory_actions_parse_failed"] is True
+
+    # The model deliberately writing nothing is NOT a parse failure.
+    empty = "Reflection body.\nMEMORY_ACTIONS_JSON: []"
+    assert "memory_actions_parse_failed" not in _entry(empty)
+
+    # Nor is a response that never carried the marker.
+    none = "Reflection body with no marker."
+    assert "memory_actions_parse_failed" not in _entry(none)
+
+    # And a repaired payload is not a failure either — the actions survive.
+    illegible = (
+        'Reflection body.\n'
+        'MEMORY_ACTIONS_JSON: [{"type": "scratchpad_append", "content": "use \\d regex"}]'
+    )
+    repaired = _entry(illegible)
+    assert "memory_actions_parse_failed" not in repaired
+    assert repaired["memory_actions"][0]["content"] == "use \\d regex"
