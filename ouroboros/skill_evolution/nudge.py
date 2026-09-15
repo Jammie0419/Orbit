@@ -33,7 +33,13 @@ NUDGE_INTERVAL_SEC = 3600.0
 # Scan bounds: at most this many recent tool rows / distinct tasks are viewed.
 RECENT_ROWS = 400
 RECENT_TASK_LIMIT = 10
-MIN_REUSABLE_TOOL_CALLS = 5
+# Candidate threshold = the generator's eligibility floor, imported so the two
+# cannot drift: a lower bar here picks tasks the generator then rejects
+# ("calls N<MIN_TOOL_CALLS"), burning the nudge on a candidate that could never
+# qualify. (Was a hardcoded 5 while the gate is 8.)
+from ouroboros.skill_evolution.auto_generation import (  # noqa: E402
+    MIN_TOOL_CALLS as MIN_REUSABLE_TOOL_CALLS,
+)
 
 
 class SkillNudgeEngine:

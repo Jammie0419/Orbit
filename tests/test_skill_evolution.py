@@ -342,6 +342,26 @@ def test_generate_task_already_recorded_skips(monkeypatch, tmp_path):
     assert captured["calls"] == []
 
 
+def test_generate_task_transient_llm_failure_is_retryable(monkeypatch, tmp_path):
+    """An `llm_extraction_failed` row means the CALL broke, not that the task is
+    unsuitable — it must not permanently disqualify the task."""
+    drive = _drive(tmp_path)
+    for i in range(6):
+        _write_tool_row(drive, "t9", "Terminal", False)
+    _write_tool_row(drive, "t9", "Bash", True)
+    _write_tool_row(drive, "t9", "Bash", False)
+    with (drive / "state" / "skill_generation_history.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "task_id": "t9", "outcome": "failed", "reason": "llm_extraction_failed",
+        }) + "\n")
+    captured = _fake_llm(monkeypatch, [{
+        "name": "retryable-skill", "description": "d", "when_to_use": "w",
+        "body": "b", "tags": ["terminal"],
+    }])
+    ag.SkillAutoGenerator(drive, llm_client=object()).maybe_generate_for_task("t9")
+    assert len(captured["calls"]) == 1   # retried despite the earlier failed row
+
+
 def test_generate_llm_failure_degrades(monkeypatch, tmp_path):
     drive = _drive(tmp_path)
     for i in range(6):
@@ -534,7 +554,10 @@ def test_nudge_cadence(tmp_path):
 
 def test_nudge_analyze_recent(tmp_path):
     drive = _drive(tmp_path)
-    for i in range(6):
+    # 9 calls: above the generator's eligibility floor (MIN_TOOL_CALLS=8). The
+    # nudge candidate threshold IS that same floor — a lower bar would select a
+    # task the generator immediately rejects ("calls N<MIN_TOOL_CALLS").
+    for i in range(9):
         _write_tool_row(drive, "taskA", "Terminal", False)
     _write_tool_row(drive, "taskB", "skill_exec", True, args={"skill": "alpha"})
     _write_tool_row(drive, "taskB", "skill_exec", False, args={"skill": "alpha"})
@@ -542,7 +565,7 @@ def test_nudge_analyze_recent(tmp_path):
     _write_tool_row(drive, "taskC", "Read", True)  # last row error -> C not reusable
     analysis = nud.SkillNudgeEngine(drive).analyze_recent()
     assert analysis["failed_skills"] == ["alpha", "beta"]
-    assert analysis["best_reusable_task"] == {"task_id": "taskA", "tool_calls": 6}
+    assert analysis["best_reusable_task"] == {"task_id": "taskA", "tool_calls": 9}
 
 
 def test_nudge_record_writes(tmp_path):

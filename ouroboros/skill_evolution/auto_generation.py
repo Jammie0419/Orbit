@@ -272,12 +272,30 @@ class SkillAutoGenerator:
         return eligibility_reason(steps, outcome_hint=outcome_hint) == "ok"
 
     def already_generated_for_task(self, task_id: str) -> bool:
-        """History guard: this task already produced a skill (or failed)."""
+        """History guard: this task already had its generation attempt settled.
+
+        ``created`` (a skill landed) and ``skipped`` (name collision, etc.) are
+        terminal. A validation ``failed`` row is also terminal — the model tried
+        and its output was unusable, so retrying only burns budget.
+
+        ``llm_extraction_failed`` is the exception: that row means the CALL broke
+        (empty/unparseable transport response), not that the task is unsuitable.
+        Treating it as terminal let one transient LLM hiccup permanently
+        disqualify the task from ever producing a skill.
+        """
         task_id = str(task_id or "").strip()
         if not task_id:
             return False
         rows = _read_jsonl(self.history_path)
-        return any(str(row.get("task_id") or "") == task_id for row in rows)
+        for row in rows:
+            if str(row.get("task_id") or "") != task_id:
+                continue
+            if str(row.get("outcome") or "") == "failed" and (
+                str(row.get("reason") or "") == "llm_extraction_failed"
+            ):
+                continue  # transient — allow another attempt
+            return True
+        return False
 
     def name_exists(self, name: str) -> bool:
         """Discovery guard: a skill with this canonical name already exists
