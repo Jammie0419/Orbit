@@ -1419,12 +1419,27 @@ def _handle_evolution_task_done(
             if isinstance(metadata.get("evolution_transaction"), dict)
             else {}
         )
+        cost_value = cost
+        cost_status = str(task_done_event.get("cost_accounting_status") or "available")
+        # A BYO route (openai-compatible/direct) has no provider catalog, so every
+        # row is unmetered and the projection reconstructs to $0.00 with status
+        # "available" — the ledger ran fine, the AMOUNT is simply unknown (this run:
+        # 65/65 rows unmetered, 634,912 prompt tokens, $0.00). Banking that zero
+        # would make budget_spent_usd, the campaign notes and the solve-capability
+        # digest all present "free" as the measured truth. The ledger-wide status
+        # stays untouched on purpose: it also gates replay safety
+        # (queue_transitions), so only the CAMPAIGN's accounting is corrected here.
+        if (
+            cost_status == "available"
+            and not cost_value
+            and int(task_done_event.get("unknown_unmetered") or 0) > 0
+        ):
+            cost_value = None
+            cost_status = "unavailable"
         lifecycle_result = update_evolution_campaign_after_task(
             str(task_id or ""),
-            cost_usd=cost,
-            cost_accounting_status=str(
-                task_done_event.get("cost_accounting_status") or "available"
-            ),
+            cost_usd=cost_value,
+            cost_accounting_status=cost_status,
             outcome_axes=outcome_axes,
             rounds=rounds,
             transaction=transaction,
@@ -4047,19 +4062,36 @@ def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
         log.warning("Failed to log owner_message_injected event", exc_info=True)
 
 
-def _handle_review_wave_budget_insufficient(evt: Dict[str, Any], ctx: Any) -> None:
-    """Persist the typed review-wave admission refusal durably (v6.69.0).
-
-    Without a registered handler the worker event would land in
-    supervisor.jsonl as an unknown_worker_event repr instead of a typed
-    events.jsonl row that budget audits can aggregate."""
+def _persist_review_wave_budget_event(evt: Dict[str, Any], ctx: Any) -> None:
+    """Persist a typed review-wave admission event for budget audits."""
     try:
         append_jsonl(
             ctx.DRIVE_ROOT / "logs" / "events.jsonl",
             {"ts": evt.get("ts", utc_now_iso()), **{k: v for k, v in evt.items() if k != "ts"}},
         )
     except Exception:
-        log.debug("Failed to log review_wave_budget_insufficient event", exc_info=True)
+        log.debug("Failed to log review-wave budget event", exc_info=True)
+
+
+def _handle_review_wave_budget_insufficient(evt: Dict[str, Any], ctx: Any) -> None:
+    """Persist the typed review-wave admission refusal durably (v6.69.0).
+
+    Without a registered handler the worker event would land in
+    supervisor.jsonl as an unknown_worker_event repr instead of a typed
+    events.jsonl row that budget audits can aggregate."""
+    _persist_review_wave_budget_event(evt, ctx)
+
+
+def _handle_review_wave_budget_partial_unknown(evt: Dict[str, Any], ctx: Any) -> None:
+    """Persist the typed review-wave partial-unknown admission (v6.69.0).
+
+    A wave was ADMITTED, but part of its estimate was unknowable (unpriced model
+    slots). The worker emits this deliberately: it is the only thing that makes the
+    ``unpriced_slots`` count observable to a later cost forensic, because an
+    admitted wave is otherwise silent. Its sibling refusal event was registered
+    while this one was not, so the signal landed in supervisor.jsonl as an untyped
+    ``unknown_worker_event`` repr that budget audits cannot aggregate."""
+    _persist_review_wave_budget_event(evt, ctx)
 
 
 def _handle_log_event(evt: Dict[str, Any], ctx: Any) -> None:
@@ -4223,6 +4255,7 @@ EVENT_HANDLERS = {
     "owner_message_injected": _handle_owner_message_injected,
     "log_event": _handle_log_event,
     "review_wave_budget_insufficient": _handle_review_wave_budget_insufficient,
+    "review_wave_budget_partial_unknown": _handle_review_wave_budget_partial_unknown,
     "skill_exec_finished": _handle_skill_lifecycle,
     "skill_exec_failed": _handle_skill_lifecycle,
     "acceptance_fence": _handle_acceptance_fence,

@@ -887,6 +887,66 @@ def test_terminal_write_exception_has_no_lifecycle_side_effects(tmp_path, monkey
     assert side_effects == []
 
 
+def test_unpriced_evolution_cost_is_not_banked_as_zero(tmp_path, monkeypatch):
+    """A BYO route (openai-compatible/direct) has no provider catalog, so every row
+    is unmetered and the projection reconstructs to $0.00 with status "available"
+    — smoke_boundry_1: 65/65 rows unmetered, 634,912 prompt tokens, $0.00. Banking
+    that zero presents "free" as measured truth in budget_spent_usd, the campaign
+    notes and the solve-capability digest."""
+    from supervisor import evolution_lifecycle
+    from supervisor.events import _handle_evolution_task_done
+
+    captured = {}
+
+    def _capture(task_id, **kwargs):
+        captured.update(kwargs)
+        return {"accepted": True, "persisted": True, "replay": False,
+                "reason": "", "transaction": {}}
+
+    monkeypatch.setattr(
+        evolution_lifecycle, "update_evolution_campaign_after_task", _capture)
+    monkeypatch.setattr(
+        "ouroboros.evolution_checkpoints.append_evolution_checkpoint",
+        lambda *_a, **_k: None,
+    )
+    ctx = SimpleNamespace(DRIVE_ROOT=tmp_path, REPO_DIR=tmp_path)
+
+    def _terminal(event, *, cost):
+        _handle_evolution_task_done(
+            ctx, evt={}, task_id="unpriced",
+            task={"metadata": {"evolution_transaction": {"transaction_id": "tx1"}}},
+            task_done_event=event,
+            outcome_axes={"execution": {"status": "ok"}}, cost=cost, rounds=65,
+        )
+
+    _terminal({
+        "status": "completed", "cost_accounting_status": "available",
+        "cost_usd": 0.0, "unknown_unmetered": 65, "non_final_rows": 65,
+        "cost_final": False,
+    }, cost=0.0)
+    assert captured["cost_usd"] is None
+    assert captured["cost_accounting_status"] == "unavailable"
+
+    # A priced cycle still flows through untouched.
+    captured.clear()
+    _terminal({
+        "status": "completed", "cost_accounting_status": "available",
+        "cost_usd": 1.25, "unknown_unmetered": 0, "cost_final": True,
+    }, cost=1.25)
+    assert captured["cost_usd"] == 1.25
+    assert captured["cost_accounting_status"] == "available"
+
+    # Partially priced (some slots unknown, but a real amount measured): the amount
+    # is knowledge, not noise — keep it.
+    captured.clear()
+    _terminal({
+        "status": "completed", "cost_accounting_status": "available",
+        "cost_usd": 0.4, "unknown_unmetered": 3, "cost_final": False,
+    }, cost=0.4)
+    assert captured["cost_usd"] == 0.4
+    assert captured["cost_accounting_status"] == "available"
+
+
 def test_rejected_terminal_does_not_consume_global_evolution_state(tmp_path, monkeypatch):
     from supervisor import evolution_lifecycle, state
     from supervisor.events import _handle_evolution_task_done

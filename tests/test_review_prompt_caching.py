@@ -1540,6 +1540,28 @@ def test_supervisor_handles_review_wave_budget_event(monkeypatch):
     assert captured.get("surface") == "skill_review"
 
 
+def test_supervisor_handles_review_wave_partial_unknown_event(monkeypatch):
+    """The partial-unknown admission is emitted precisely so an unpriced slot stays
+    observable to a cost forensic. Without a handler it landed in supervisor.jsonl
+    as an untyped ``unknown_worker_event`` repr that budget audits cannot aggregate
+    (smoke_boundry_1: 2 such events, dropped)."""
+    from supervisor import events as sup_events
+
+    assert "review_wave_budget_partial_unknown" in sup_events.EVENT_HANDLERS
+    captured = {}
+    monkeypatch.setattr(sup_events, "append_jsonl", lambda path, row: captured.update(row))
+
+    class _Ctx:
+        DRIVE_ROOT = pathlib.Path("/tmp")
+
+    sup_events.EVENT_HANDLERS["review_wave_budget_partial_unknown"](
+        {"type": "review_wave_budget_partial_unknown", "surface": "scope_review",
+         "estimated_wave_usd": 30.0, "unpriced_slots": 1}, _Ctx(),
+    )
+    assert captured.get("type") == "review_wave_budget_partial_unknown"
+    assert captured.get("unpriced_slots") == 1
+
+
 def test_scope_review_usage_flows_through_substrate_once():
     """Behavioral pin for the v6.69.0 dedup: one scope call → exactly one
     llm_usage event, emitted by the review substrate per-slot path (the former
