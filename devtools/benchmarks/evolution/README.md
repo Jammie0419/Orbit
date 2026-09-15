@@ -164,40 +164,135 @@ python devtools/benchmarks/evolution/analyze_session.py \
 
 ## 日志输出格式
 
-每条记录处理时会输出分类标签，便于监控和理解：
+日志按论文 LEAP 的**算法 1 算子**组织（不再按数据来源打标签）。格式化代码在
+`leap_report.py`（纯渲染：无 IO、不产生指标），驱动收集数值后按**三段时刻**发出，避免慢
+provider 让运行看起来像卡死：
+
+| 时刻 | 输出 |
+|---|---|
+| 记录开始（播种后） | 块头 + `②执行 轨迹播种 N 行` |
+| 反思返回后（promote 前） | `②执行` 目标/轮次/摘要 + `④记忆`（记忆落库、backlog、技能资格） |
+| promote 决策返回后 | `③归因` → `④记忆 +经验` → `⑤触发` → `⑥规划` → `⑨遗传(行为级技能)` → `[战役] …` → `⑦变异 开` |
+| 战役终态被轮询到 | `⑨遗传 ⤷ absorbed/abandoned/no_op/infra_failed` → `⑪沉淀 checkpoints: …` |
 
 ```
-── [记录  5/11] 2023_level2:35 (L2) ──────────────────────
-[语料]    轨迹播种 175 行
-[反思]    目标: ... | 轮次 155 | 错误 16 | 标记: SHELL_EXIT_ERROR
-[反思]    摘要: <prose 前160字>
-[记忆]    knowledge_write「tool_registration」: ... | 落库 2/2
-[backlog] +ibl-xxx "..." (high | count=1)
-[技能]    资格: ✅ (ok) | 生成: xxx v1
-[信用]    +5 步计分: 最高 web_search 0.31 | 最低 browse_page 0.08
-[积累]    +1 经验 | 账本累计 5
-[决策]    cadence 1/5 → 未到期 | 跳过晋升
-[记录  5/11] 2023_level2:35: 反思1522字 rounds=155 mem=2 backlog=2 seed=175 promote=False
-
-[战役#1] 开: "..." (task xxx)
-[战役#1] 05m | 调用62 (edit 10, shell 17) | arg_err 2 | gate_blk 0
-[战役#1] ⤷ commit ✅ 24fda749bb
-[战役#1] ⤷ absorbed ✅
-
-── [里程碑 @记录5] 记录5 | 周期1 (吸收1, no_op0) | 技能3 | 经验5 | backlog开放8 ──
+━━ 记录  5/11 · 2023_level2:35 (L2) ━━━━━━━━━━━━━━━━━━━━━━━━
+ ②执行  τ  轨迹播种 175 行
+        ↓（静默数分钟＝反思 LLM 调用中）
+ ②执行  τ  目标: … | 轮次 155 | 错误 16 | 标记 SHELL_EXIT_ERROR,TOOL_ERROR | 反思 1757 字
+          摘要: …
+ ④记忆  M  knowledge_write「task_planning」: … | scratchpad_append: … | 落库 2/2
+          backlog 候选 2 | 新增 2（high 1 | med 1） | 技能资格 ✅ (ok)
+ ③归因  E  信用 +5 步计分: 最高 browse_page 0.0061 | 最低 run_command 0.0023
+          Track-A task=2023_level2:35 | 结果=task | 类型=capability(h) | 关键=browse_page(0.01)
+ ④记忆  M  +1 经验（账本累计 5）
+ ⑤触发  W  cadence 0/5 | LLM: promote ✅ 理由: …
+ ⑥规划  P  目标: Add automatic capability pre-check… | backlog: ibl-e6e0f878cbe9
+ ⑨遗传  H  技能生成: web-archive-text-extractor (task 2023_level2:35)
+[战役]    第 1/1 个战役已提交请求
+[战役]    达到战役上限 1，停止喂料（剩余 6 条记录未处理）
+ ⑦变异  Δ  战役#1 开: "Add automatic capability pre-check…" (task 675e1043)
+ ⑧选择  ✓  战役#1 ⤷ commit ✅ b2f0c13f40
+ ⑨遗传  H  战役#1 ⤷ absorbed ✅
+ ⑪沉淀  M  checkpoints: 行=2 周期=1 吸收=1 分布={'absorbed': 1, 'waiting_for_restart': 1} 成本=$0
+━━ 里程碑 @记录5 ━━ 周期1 (吸收1, no_op0) | 技能4 | 经验5 | backlog开放7
+ 等待  ·  等待最后一个战役完成…
+ 等待  ·  300s · 战役进行中 · 调用 30 · 编辑 4 · shell 3 · 提交 3 · 参数错 2 · 闸门拦 2 · 最近 advisory_review
+[isolated-server] restart signal: server busy — will retry (silenced until it changes)   ← 仅终端
+━━ 会话收尾 · 臂 V3 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ⑪沉淀  M  记录 5/11 | 失败 0
+          吸收 1 | 放弃 0 | no_op 0 | 成本 $0
+          账本分布 absorbed=1, waiting_for_restart=1
+          吸收提交:
+            b2f0c13f404c  feat: add tool preflight checks …
+          clone b2f0c13f | tag V3-evolved
+          ledger: <session>/session_ledger.json
 ```
 
-**标签说明**：
-- `[语料]`：轨迹播种行数
-- `[反思]`：LLM 反思的目标、轮次、错误、摘要
-- `[记忆]`：写入的知识和 scratchpad
-- `[backlog]`：新增的改进候选
-- `[技能]`：技能资格判定和生成结果
-- `[信用]`：步骤信用分配（关键步骤）
-- `[积累]`：经验账本累计
-- `[决策]`：晋升决策（cadence 状态、理由、目标）
-- `[战役#N]`：战役启动、进度、提交、吸收
-- `[里程碑]`：每 5 条记录的累计统计
+**算子标（＝算法 1 步号）**：`②执行 τ` / `③归因 E` / `④记忆 M`（含 `+1 经验` 这一次写入）/
+`⑤触发 W` / `⑥规划 P` / `⑦变异 Δ`（**代码侧**补丁，隔离克隆）/ `⑧选择 ✓` / `⑨遗传 H`
+（代码级＝吸收提交；行为级＝技能生成）/ `⑪沉淀 M`（第 12 步：**结果已知之后**的账本写入——
+所以它跟在战役终态行后面，而不是"发起战役的那条记录"末尾）。`①表达` 永不出现：隔离
+runner 观察不到 agent 的路由，不做占位。
+
+**四类行**：算子标行；`[战役]` / `[战役#N]` 战役命名空间；`等待 ·` / `运行 ·` 运行态行
+（等待、心跳、收尾动作，**不带**算子标）；`[isolated-server] …` 是驱动的 server 助手裸
+`print`——**只在终端，不进 `run_evolution_arm.log`**（同一段 busy 只报一次；实测日志文件
+命中 0）。
+
+**两套编号**（都对，含义不同）：
+- `[战役] 第 N/M 个战役已提交请求` = **本 session 内**计数 / 本 session 的 `--max-absorbed`
+  预算（resume 后按新的基线重新计数）；
+- `⑧选择 战役#K`、`⑨遗传 战役#K` = **campaign 的 cycle 号**，跨 session 连续（同一 campaign
+  文档承载连续的 cycle）。
+
+**心跳**：状态没变就不重复输出，每 5 分钟补一条存活线；字段为 调用/编辑/shell/提交/参数错/
+闸门拦/最近。
+
+三个版本的完整预期输出（`--max-absorbed 1` / `--max-absorbed 2` / 先 `max=1` 再
+`--resume --max-absorbed 2`）见
+[`docs/orbit/EXPECTED_RUN_OUTPUT.md`](../../../docs/orbit/EXPECTED_RUN_OUTPUT.md)，
+由真实渲染器生成，可逐行核对。
+
+## 评审强度：两个开关（默认关闭，跑语料时保持默认）
+
+语料跑**刻意保持默认**：让循环转起来、持续产出吸收，不被选择层打断。两个开关会改变方法
+本身，若要启用必须四臂一致并重跑基线：
+
+1. **`OUROBOROS_REVIEW_ENFORCEMENT=blocking`** —— 让"选择"算子**真的拦**。默认 `advisory`
+   （`config.py`），所有阻断信号被降级为警告 + 一条 owner 可见的 `review_advisory_override`
+   审计。实测证据：`PREFLIGHT_BLOCKED: New files added in ouroboros/ or supervisor/ but
+   docs/ARCHITECTURE.md is not staged` 被降级后，提交在**未改该文档**的情况下落地。开启后
+   提交失败率会上升——那正是 selection pressure，不是回归。
+2. **`OUROBOROS_ADVISORY_REVIEW_ROUTE=agent_session`** —— 让 advisory 预评审**真的跑**。默认
+   路由 `api` 需要 `ANTHROPIC_API_KEY`；在 BYO `openai-compatible` 环境下每次
+   `advisory_review` 会自动 bypass，并记录
+   `status=bypassed, reason="ANTHROPIC_API_KEY not set — auto-bypassed (advisory route=api)"`。
+   `agent_session` 是 keyless 的 delegated 路由，**尚未在本机 xiaomi/openai-compatible 环境
+   验证**，启用前先用单周期试跑。
+
+**默认口径下，一次落地提交实际过了什么**：triad + scope 两道 LLM 评审（给出意见、不阻断）、
+attribution / evolution authority / 重启收据校验（硬性），以及一次**被审计的** advisory
+bypass。这些都有持久痕迹（`state/advisory_review.json` 的 attempts：`no_advisory` →
+`advisory_review_required` → `succeeded`；`logs/events.jsonl` 的 `advisory_review_bypassed`、
+`review_advisory_override`），所以写论文时可以如实报告评审强度，而不是笼统写"已评审"。
+
+驱动另外会向隔离 server 注入三个 benchmark 专用开关：
+`OUROBOROS_PRE_PUSH_TESTS=0`（语料提交不被本仓库自身的尺寸债普查挡住）、
+`OUROBOROS_REQUIRE_ADVISORY_REVIEW=1`（拒绝 `skip_advisory_review=True` 这条调用级捷径；
+advisory 工具必须被调用，其 bypass 会被审计）、
+`OUROBOROS_DIE_WITH_PARENT=1`（隔离 server 树随 harness 生命周期结束，避免被硬杀的 launcher
+留下孤儿进程继续写同一 drive root）。
+
+## 本轮改动（2026-09-15）
+
+**驱动/循环**
+- `--max-absorbed` 真正生效：战役是异步创建的，计数改为"等战役出现后再数"
+  （`account_promoted_campaign`），且上限判定对**每条记录**复查（原先只在 promote 决策分支
+  里判，`promote=False` 的记录不会复查 → `第 0/1 个战役` 那种日志）。
+- 一个战役独占执行：下一块的反思先等 commit 落定，再与**吸收**并行
+  （`wait_for_campaign_execution`），记录头标注 `· 并行 战役#K 吸收中`。
+- 停喂料会说明原因（撞上限 vs 语料喂完）；`_budget_reached` 在 `try` 之前绑定，避免启动阶段
+  失败时把收尾文案变成 `NameError`。
+- 日志按算子组织、三段发射、收尾块汇总；心跳仅变化时输出；bounce 的 busy 提示一段只报一次。
+
+**演进账本（产品侧）**
+- 被基础设施打死的无提交周期记为 `infra_failed`（附 `infra:<原因>`），**不再**计入目标重复
+  计数、也不进 `dropped_objective_fps`（原先与"主动判断无需改动"的 `no_op` 无法区分）。
+- replay 终态会回填该周期的 rounds/cost（boot 对账可能先于终态到达）；摘要现在能读到失败的
+  原因。
+- 反思输出能容忍单个非法 JSON 转义或裸控制字符（原先整块 memory actions 被丢弃）；仍不可
+  解析时标 `memory_actions_parse_failed`，不再看起来像"模型主动留空"。
+
+**进程/可观测**
+- 隔离 server 及其 worker 的 stdout/stderr 落盘到会话目录旁（原为 `DEVNULL`：worker 的
+  traceback 无痕消失）。
+- 无价格目录的模型不再把 `$0.00` 当"available"记进 campaign（账本全局状态不动——它同时是
+  重放安全闸门）。
+- 孤儿防护：server 有优雅 SIGTERM/SIGINT 收尾路径（收掉整棵 worker 树）、fork 出的 worker
+  重置继承的信号处理器、bench 启动的 server 武装 `PR_SET_PDEATHSIG`（双向实测：父被
+  SIGKILL 时子随之死亡；不武装则存活留下孤儿）。
+- 原先无人处理的 review 事件（`review_wave_budget_partial_unknown`）现在落成类型化行。
 
 ## 注意（规格 §10.8 常见坑）
 
