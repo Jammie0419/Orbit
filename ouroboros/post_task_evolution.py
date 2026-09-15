@@ -407,12 +407,21 @@ def maybe_promote(env: Any, task: Dict[str, Any], reflection_entry: Optional[Dic
         # skill pipeline) silently throttled those layers to the promotion
         # cadence: every_n:5 would have cut skill chances to 1/5, --cadence off
         # (screening) to zero, and the queued-request guard to zero whenever a
-        # cycle was in flight. Each layer keeps its own switch; short-circuit
-        # order preserves the counter semantics (only every_n advances it).
+        # cycle was in flight. Each layer keeps its own switch.
+        #
+        # Gate ORDER matters: _counter_due both advances and tests the counter,
+        # so it must not run while the queued-request gate already blocks the
+        # promotion — otherwise that due slot is consumed invisibly and the real
+        # spacing between promotions becomes 2N+ (every_n:N drifting to an upper
+        # bound instead of a schedule).
+        request_queued = (drive_root / _REQUEST_REL).exists()
+        counter_due = False
+        if cadence.startswith("every_n") and not request_queued:
+            counter_due = _counter_due(drive_root, _parse_every_n(cadence))
         promotion_due = not (
             cadence == "off"
-            or (cadence.startswith("every_n") and not _counter_due(drive_root, _parse_every_n(cadence)))
-            or (drive_root / _REQUEST_REL).exists()
+            or request_queued
+            or (cadence.startswith("every_n") and not counter_due)
         )
         # Evolution layer (PAPER 不足 4+5+7, OUROBOROS_MULTI_AGENT_EVOLVER): when
         # enabled — and ONLY then — extract trajectory experience (A: this task's
@@ -589,7 +598,15 @@ def apply_pending_request(drive_root: Any) -> bool:
                 log.error("Post-task promotion deferred: cost accounting unavailable", exc_info=True)
                 return False
             if remaining < budget_floor:
-                _safe_unlink(path)
+                # Temporary condition: DEFER, don't discard. Deleting the durable
+                # request here permanently dropped a promotion that would have
+                # been valid after the budget window — the "campaign already
+                # enabled" branch above deliberately leaves its request for a
+                # later tick for exactly this reason.
+                log.info(
+                    "Post-task promotion deferred: budget %.4f below floor %.4f",
+                    remaining, budget_floor,
+                )
                 return False
         if bool(req.get("requires_plan_review", True)):
             objective += _PLAN_REVIEW_SUFFIX
