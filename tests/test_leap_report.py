@@ -1,0 +1,231 @@
+"""The evolution run log is grouped by LEAP operators (Algorithm 1).
+
+Formatting only: these tests pin the grouping, the operator numbering, and — most
+importantly — that re-grouping the log did not drop a single datum the previous
+per-source labels carried.
+"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+import pytest
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from devtools.benchmarks.evolution import leap_report  # noqa: E402
+
+
+def _full_view(**overrides):
+    """A record that exercised every stage, with each field holding a real value."""
+    values = dict(
+        index=5, total=11, record_id="2023_level2:35", level="2",
+        goal="What is the maximum length in meters of #9…",
+        seeded=175, rounds=155, error_count=16,
+        markers=("SHELL_EXIT_ERROR", "TOOL_ERROR"),
+        reflection_chars=1297, summary="**Reflection** the task failed because…",
+        credits_new=(
+            {"tool": "web_search", "credit": 0.033},
+            {"tool": "run_command", "credit": 0.005},
+        ),
+        track_a=("task=2023_level2:35 | 结果=task | 类型=capability(h) | 关键=web_search(0.01)",),
+        track_b=("cycle=f0523253 | 结果=no_op | 类型=capability(m) | 关键=search_code(0.02)",),
+        memory_actions=(("scratchpad_append", "When youtube_transcript returns…"),),
+        memory_applied=1, memory_total=1,
+        experience_delta=1, experience_total=11,
+        backlog_candidates=2,
+        backlog_items=({"id": "ibl-abc123", "summary": "Add early capability-detection step…",
+                        "priority": "high", "count": 1},),
+        skill_eligibility="ok",
+        decision_kind="promote", cadence_text="0/5",
+        decision_reason="The recent task failed due to lack of vision capability detection",
+        promote_objective="Add early capability-detection step for vision-dependent tasks",
+        promote_backlog_id="ibl-3a4364ba2650",
+        skill_events=(("生成", "standards-document-retriever (task 2023_level3:10)"),),
+        checkpoint_lines=("checkpoints: 行=1 周期=1 吸收=0 分布={'no_op': 1} 成本=$0",),
+    )
+    values.update(overrides)
+    return leap_report.RecordView(**values)
+
+
+def test_record_block_keeps_every_datum_the_old_labels_carried():
+    """The re-grouping must not lose information: every value the per-source labels
+    used to print still appears (this is the guard for the whole refactor)."""
+    text = "\n".join(leap_report.render_record_block(_full_view()))
+
+    # ②执行 — corpus seeding, the reflection's rounds/errors/markers/goal/summary
+    assert "轨迹播种 175 行" in text
+    assert "What is the maximum length in meters of #9…" in text
+    assert "轮次 155" in text and "错误 16" in text
+    assert "SHELL_EXIT_ERROR,TOOL_ERROR" in text
+    assert "反思 1297 字" in text
+    assert "**Reflection** the task failed because…" in text
+    # ③归因 — credit extremes + both experience tracks, verbatim
+    assert "信用 +2 步计分" in text
+    assert "最高 web_search 0.033" in text and "最低 run_command 0.005" in text
+    assert "Track-A task=2023_level2:35 | 结果=task" in text
+    assert "Track-B cycle=f0523253 | 结果=no_op" in text
+    # ④记忆 — each action, the applied ratio, experience accumulation, backlog cadence
+    assert "scratchpad_append: When youtube_transcript returns…" in text
+    assert "落库 1/1" in text
+    assert "+1 经验（账本累计 11）" in text
+    assert "backlog 候选 2 | 新增 1" in text
+    assert "ibl-abc123" in text and "high | count=1" in text
+    assert "技能资格 ✅ (ok)" in text
+    # ⑤触发 — cadence, the promote verdict with its reason, objective and backlog link
+    assert "cadence 0/5 | LLM: promote ✅" in text
+    assert "lack of vision capability detection" in text
+    assert "Add early capability-detection step for vision-dependent tasks" in text
+    assert "backlog: ibl-3a4364ba2650" in text
+    # ⑨遗传·行为级 / ⑪沉淀
+    assert "技能生成: standards-document-retriever" in text
+    assert "checkpoints: 行=1 周期=1 吸收=0 分布={'no_op': 1} 成本=$0" in text
+
+
+def test_record_block_reports_the_counts_even_when_nothing_was_produced():
+    """`mem=0` / `backlog=0` used to be printed unconditionally; the memory count is
+    a memory-layer statistic, so its absence must still be stated (and a broken
+    payload must be distinguishable from a deliberate empty)."""
+    text = "\n".join(leap_report.render_record_block(_full_view(
+        memory_actions=(), memory_applied=None, memory_total=0,
+        backlog_candidates=0, backlog_items=(), skill_events=(), checkpoint_lines=(),
+        track_a=(), track_b=(), credits_new=(),
+    )))
+    assert "落库 0/0" in text
+    assert "mem_parse_failed" not in text
+
+
+def test_record_block_marks_an_unparseable_memory_block_as_loss():
+    text = "\n".join(leap_report.render_record_block(_full_view(
+        memory_actions=(), memory_applied=None, memory_total=0,
+        memory_parse_failed=True,
+    )))
+    assert "mem_parse_failed" in text
+    assert "落库 0/0" not in text, "loss must not be rendered as a deliberate empty"
+
+
+@pytest.mark.parametrize("kind,glyph", [
+    ("skip", "⑤触发"), ("refuse", "⑤触发"), ("promote", "⑤触发"),
+])
+def test_decision_always_renders_under_the_worthiness_operator(kind, glyph):
+    text = "\n".join(leap_report.render_record_block(
+        _full_view(decision_kind=kind, decision_reason="cadence 1/5 未到期")))
+    assert glyph in text
+
+
+def test_stage_numbering_matches_algorithm_1():
+    """Labels must stay tied to the paper's loop: Algorithm 1 steps -> operators.
+
+    A drifted number would silently re-file a datum under the wrong operator (the
+    skill chain, for one, belongs to heredity and was NOT filed there before).
+    """
+    assert leap_report.stage_label(2) == "②执行"
+    assert leap_report.stage_label(3) == "③归因"
+    assert leap_report.stage_label(4) == "④记忆"
+    assert leap_report.stage_label(5) == "⑤触发"
+    assert leap_report.stage_label(7) == "⑦变异"
+    assert leap_report.stage_label(8) == "⑧选择"
+    assert leap_report.stage_label(9) == "⑨遗传"
+    assert leap_report.stage_label(11) == "⑪沉淀"
+    # Operator 1 (Expression) is never rendered: the runner does not observe routing.
+    text = "\n".join(leap_report.render_record_block(_full_view()))
+    assert "①表达" not in text
+
+
+def test_skill_events_render_under_heredity_not_variation():
+    """Algorithm 1 annotates step 11 `SkillEvolve … ▷ 遗传：行为级生成/变异/审查`, and
+    the §4.2 ablation table files the whole skill chain under "−遗传". ⑦变异 is the
+    CODE-side patch operator — skill events must never render there."""
+    text = "\n".join(leap_report.render_record_block(_full_view()))
+    skill_line = next(line for line in text.splitlines() if "standards-document-retriever" in line)
+    assert "⑨遗传" in skill_line
+    assert "⑦变异" not in skill_line
+
+
+def test_evolution_event_operators_follow_the_loop():
+    """Campaign transitions: producing the patch is variation (7), landing it through
+    review is selection (8), resolving it to absorbed/abandoned is heredity (9)."""
+    opened = leap_report.render_evolution_event(cycle=1, kind="open", detail='开: "obj" (task 12345678)')
+    committed = leap_report.render_evolution_event(cycle=1, kind="commit", detail="⤷ commit ✅ abc1234567")
+    absorbed = leap_report.render_evolution_event(cycle=1, kind="outcome", detail="⤷ absorbed", mark="✅")
+
+    assert "⑦变异" in opened and "⑦变异" not in committed
+    assert "⑧选择" in committed
+    assert "⑨遗传" in absorbed and absorbed.rstrip().endswith("✅")
+
+
+def test_missing_stages_are_omitted_not_padded():
+    """A stage with no data contributes no line at all (no placeholder), while the
+    stages that did run keep their chips."""
+    lines = leap_report.render_record_block(leap_report.RecordView(
+        index=1, total=1, record_id="t", seeded=7, rounds=2,
+    ))
+    text = "\n".join(lines)
+    assert "轨迹播种 7 行" in text
+    assert "③归因" not in text and "⑤触发" not in text
+    assert "⑨遗传" not in text and "⑪沉淀" not in text
+
+
+def test_checkpoints_lines_report_the_cumulative_ledger():
+    empty = leap_report.checkpoints_lines(rows=0, cycles=0, absorbed=0, dist={}, cost=0.0)
+    assert empty == ["checkpoints: （尚无周期记录）"]
+
+    filled = leap_report.checkpoints_lines(
+        rows=3, cycles=2, absorbed=1, dist={"absorbed": 1, "no_op": 1}, cost=0.25,
+        absorbed_rows=[{"commit_sha": "abcdef1234567890", "campaign_objective": "Harden the loop"}],
+    )
+    assert "行=3 周期=2 吸收=1" in filled[0]
+    assert "成本=$0.25" in filled[0]
+    assert "absorbed abcdef123456" in filled[1]
+
+
+def test_session_head_and_foot_carry_the_run_identity():
+    head = "\n".join(leap_report.render_session_head(
+        arm="V3", records=130, cadence="every_n:5", cadence_n=5,
+        max_absorbed=10, baseline=2, models={"main": "m", "light": "l", "heavy": "h"},
+    ))
+    assert "臂 V3" in head and "语料 130 条" in head and "every_n:5" in head
+    assert "main=m light=l heavy=h" in head
+    assert "max=10" in head and "cadence 块大小=5" in head and "历史战役基线=2" in head
+
+    foot = "\n".join(leap_report.render_session_foot(
+        arm="V3", ledger_path=pathlib.Path("/s/session_ledger.json"), commits="abc123 feat: x",
+    ))
+    assert "ledger: /s/session_ledger.json" in foot
+    assert "吸收 commit（V3-evolved tag 相对起点）: abc123 feat: x" in foot
+    empty_foot = "\n".join(leap_report.render_session_foot(
+        arm="V3", ledger_path=pathlib.Path("/s/ledger.json"), commits="  ",
+    ))
+    assert "(无)" in empty_foot
+
+
+def test_render_never_raises_on_hostile_values():
+    """The block is emitted inside the feeding loop: rendering must survive whatever
+    the upstream data holds (None rounds, non-dict items, huge strings)."""
+    view = _full_view(
+        rounds=None, markers=None, credits_new=({"tool": None, "credit": None},),
+        track_a=("",), memory_actions=((None, None),),
+        backlog_items=({"id": None, "summary": None},),
+        skill_events=((None, None),), checkpoint_lines=("x" * 500,),
+        decision_kind="refuse", decision_reason=None,
+    )
+    lines = leap_report.render_record_block(view)
+    assert lines and all(isinstance(line, str) for line in lines)
+
+
+def test_objective_renders_under_plan_not_under_the_trigger():
+    """Algorithm 1 step 6 is ``plan ← Plan(E, H)``: the chosen objective is the PLAN,
+    while the promote verdict belongs to the worthiness trigger (step 5)."""
+    text = "\n".join(leap_report.render_record_block(_full_view()))
+    objective_line = next(line for line in text.splitlines() if "early capability-detection step for" in line)
+    assert "⑥规划" in objective_line, objective_line
+    assert "⑤触发" in text, "the verdict itself still belongs to the trigger"
+
+
+def test_plan_line_is_absent_when_nothing_was_promoted():
+    text = "\n".join(leap_report.render_record_block(_full_view(
+        decision_kind="skip", decision_reason="cadence 1/5 未到期")))
+    assert "⑥规划" not in text
+    assert "⑤触发" in text

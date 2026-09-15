@@ -48,6 +48,7 @@ from devtools.benchmarks.common.server_runner import (
     build_isolated_settings,
     seed_owner_state,
 )
+from devtools.benchmarks.evolution import leap_report
 
 
 class CampaignState(Enum):
@@ -697,24 +698,40 @@ def cycle_count(data_root: pathlib.Path) -> int:
     return sum(1 for r in checkpoint_rows(data_root) if r.get("kind") == "cycle_outcome")
 
 
-def snapshot_checkpoint_summary(data_root: pathlib.Path) -> None:
+def _emit_record_block(view: Any) -> None:
+    """Render one record's LEAP block. Display only: a rendering fault must never
+    reach the feeding path (the operators' work is already done by this point)."""
+    try:
+        for line in leap_report.render_record_block(view):
+            _log(line)
+    except Exception:  # noqa: BLE001 - display only
+        pass
+
+
+def checkpoint_block_lines(data_root: pathlib.Path) -> list:
+    """⑪沉淀 lines for the current record block (cumulative cycle ledger)."""
     rows = checkpoint_rows(data_root)
     cycles = [r for r in rows if r.get("kind") == "cycle_outcome"]
+    camp = _read_json(data_root / "state" / "evolution_campaign.json")
     if not cycles:
-        _log("checkpoints: （尚无周期记录）")
-        return
+        return leap_report.checkpoints_lines(
+            rows=len(rows), cycles=camp.get("cycles_done", 0),
+            absorbed=camp.get("absorbed_cycles_done", 0), dist={}, cost=0.0,
+        )
     from collections import Counter
     dist = Counter(r.get("cycle_outcome") for r in cycles)
     cost = round(sum(r.get("cost_usd", 0) or 0 for r in cycles), 2)
     # 周期数以 campaign 权威计数为准（去重 task 数兜底）——旧标签"周期=行数"
     # 把 waiting/absorbed 两行算成两个周期，误导（每个周期最多写两行）。
-    camp = _read_json(data_root / "state" / "evolution_campaign.json")
     n_tasks = len({r.get("task_id") for r in cycles if r.get("task_id")})
-    _log(f"checkpoints: 行={len(rows)} 周期={camp.get('cycles_done', n_tasks)} "
-         f"吸收={camp.get('absorbed_cycles_done', 0)} 分布={dict(dist)} 成本=${cost}")
-    for r in cycles:
-        if r.get("cycle_outcome") == "absorbed":
-            _log(f"  absorbed {r.get('commit_sha', '')[:12]} | {str(r.get('campaign_objective') or '')[:60]}")
+    return leap_report.checkpoints_lines(
+        rows=len(rows),
+        cycles=camp.get("cycles_done", n_tasks),
+        absorbed=camp.get("absorbed_cycles_done", 0),
+        dist=dist,
+        cost=cost,
+        absorbed_rows=[r for r in cycles if r.get("cycle_outcome") == "absorbed"],
+    )
 
 
 def _promote_skip_reason(data_root: pathlib.Path) -> str:
@@ -748,11 +765,15 @@ def _milestone(data_root: pathlib.Path, i: int) -> None:
                       if str(it.get("status") or "open").lower() not in {"done", "closed", "dropped"})
     except Exception:  # noqa: BLE001 - display only
         open_bl = "?"
-    _log(f"── [里程碑 @记录{i}] 记录{i} | 周期{camp.get('cycles_done', 0)} "
-         f"(吸收{camp.get('absorbed_cycles_done', 0)}, no_op{dist.get('no_op', 0)}) | "
-         f"技能{n_skills} | "
-         f"经验{_count_lines(data_root / 'state' / 'evolution_experiences.jsonl')} | "
-         f"backlog开放{open_bl} ──")
+    _log(leap_report.render_milestone(
+        index=i,
+        cycles=camp.get("cycles_done", 0),
+        absorbed=camp.get("absorbed_cycles_done", 0),
+        no_op=dist.get("no_op", 0),
+        skills=n_skills,
+        experiences=_count_lines(data_root / "state" / "evolution_experiences.jsonl"),
+        backlog_open=open_bl,
+    ))
 
 
 def _provider_probe(timeout: float = 120.0) -> None:
@@ -852,11 +873,13 @@ def _campaign_transitions(data_root: pathlib.Path) -> None:
     cyc = str(tx.get("cycle") or "?")
     if task_id and task_id != _CAMPAIGN_SNAPSHOT["task_id"]:
         obj = _head(str(camp.get("objective") or "").split("（战役执行契约")[0], 90)
-        _log(f"[战役#{cyc}] 开: \"{obj}\" (task {task_id[:8]})")
+        _log(leap_report.render_evolution_event(
+            cycle=cyc, kind="open", detail=f'开: "{obj}" (task {task_id[:8]})'))
         _CAMPAIGN_SNAPSHOT.update(task_id=task_id, commit_sha="", cycle=cyc)
     sha = str(tx.get("commit_sha") or "")
     if task_id and sha and sha != _CAMPAIGN_SNAPSHOT["commit_sha"]:
-        _log(f"[战役#{cyc}] ⤷ commit ✅ {sha[:10]}")
+        _log(leap_report.render_evolution_event(
+            cycle=cyc, kind="commit", detail=f"⤷ commit ✅ {sha[:10]}"))
         _CAMPAIGN_SNAPSHOT["commit_sha"] = sha
     if not tx and _CAMPAIGN_SNAPSHOT["task_id"]:
         outcome = "unknown"
@@ -865,7 +888,9 @@ def _campaign_transitions(data_root: pathlib.Path) -> None:
                 outcome = str(r.get("cycle_outcome"))
                 break
         mark = "✅" if outcome == "absorbed" else ""
-        _log(f"[战役#{_CAMPAIGN_SNAPSHOT['cycle']}] ⤷ {outcome} {mark}".rstrip())
+        _log(leap_report.render_evolution_event(
+            cycle=_CAMPAIGN_SNAPSHOT["cycle"], kind="outcome",
+            detail=f"⤷ {outcome}", mark=mark).rstrip())
         _CAMPAIGN_SNAPSHOT.update(task_id="", commit_sha="", cycle="?")
 
 
@@ -1591,7 +1616,7 @@ def main() -> int:
     if _m_cfg and _m_main != _m_cfg:
         _log(f"警告: driver 主模型 {_m_main} 与 live settings 的 {_m_cfg} 不一致，"
              f"请通过 .env/环境变量显式设置 OUROBOROS_MODEL 后重跑")
-    _log(f"模型槽位: main={_m_main} light={_m_light} heavy={_m_heavy}")
+    _session_models = {"main": _m_main, "light": _m_light, "heavy": _m_heavy}
 
     from ouroboros.agent import Env
     import ouroboros.post_task_evolution as post_task_evolution
@@ -1614,8 +1639,12 @@ def main() -> int:
         # --max-absorbed — each session (including --resume) gets a fresh budget.
         _campaigns_baseline = count_started_campaigns(data_root)
         _cadence_n = parse_cadence_n(args.cadence)
-        _log(f"session 战役预算: max={args.max_absorbed} | cadence 块大小={_cadence_n} | "
-             f"历史战役基线={_campaigns_baseline}")
+        for _line in leap_report.render_session_head(
+            arm=args.arm, records=len(corpus), cadence=args.cadence,
+            cadence_n=_cadence_n, max_absorbed=args.max_absorbed,
+            baseline=_campaigns_baseline, models=_session_models,
+        ):
+            _log(_line)
         try:
             _log(f"starting isolated server on {server.base_url} …")
             server.start(ready_timeout=240)
@@ -1630,6 +1659,9 @@ def main() -> int:
             for pos, rec in enumerate(remaining, 1):
                 i = start_idx + pos
                 _budget_reached = False
+                # Bound before the try so the fault path can render whatever this
+                # record harvested (None = the fault preceded the first field).
+                _view = None
                 try:
                     # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
                     # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
@@ -1637,7 +1669,10 @@ def main() -> int:
                     if get_campaign_state(data_root) == CampaignState.RUNNING:
                         _log("[等待] 在途战役仍在执行——等它提交后再开始下一轮反思")
                         wait_for_campaign_execution(data_root, server, timeout=args.campaign_timeout)
-                    _log(f"── [记录 {i:2d}/{len(corpus)}] {rec['id']} (L{rec.get('level', '?')}) " + "─" * 22)
+                    _view = leap_report.RecordView(
+                        index=i, total=len(corpus), record_id=rec["id"],
+                        level=str(rec.get("level", "?")),
+                    )
                     task_dict = {"id": rec["id"], "text": rec["task"], "drive_root": str(data_root)}
                     llm_trace = load_trace_from_path(rec["trace_ref"], base_dir=args.corpus.parent)
                     # 种子化：把语料轨迹行写入会话 tools.jsonl（Track A 经验学习
@@ -1645,10 +1680,10 @@ def main() -> int:
                     try:
                         seeded = _seed_trace_rows(data_root, rec, llm_trace)
                     except Exception as exc:  # noqa: BLE001 - seeding must not kill the record
-                        _log(f"[语料]    轨迹播种失败（不影响回放）: {exc}")
+                        _view.seed_error = str(exc)
                         seeded = 0
                     else:
-                        _log(f"[语料]    轨迹播种 {seeded} 行")
+                        _view.seeded = seeded
                     # 语料 trace 自带生产持久化的 trace_summary；空（旧语料）时才本地合成。
                     trace_summary = str(llm_trace.get("trace_summary") or "").strip()
                     if not trace_summary:
@@ -1662,34 +1697,40 @@ def main() -> int:
                     # 生产 reflection 出参键是 memory_actions / backlog_candidates /
                     # reflection（MEMORY_ACTIONS_JSON/BACKLOG_CANDIDATES_JSON 只是
                     # prompt 里的行标记，不在 entry 上）。
-                    _log(f"[反思]    目标: {_head(reflection_entry.get('goal'), 80)} | "
-                         f"轮次 {usage_dict.get('rounds')} | 错误 {reflection_entry.get('error_count', 0)} | "
-                         f"标记: {','.join(reflection_entry.get('key_markers') or []) or '—'}")
-                    refl_head = _head(reflection_entry.get("reflection"), 160)
-                    if refl_head:
-                        _log(f"[反思]    摘要: {refl_head}")
+                    _view.goal = str(reflection_entry.get("goal") or "")
+                    _view.rounds = usage_dict.get("rounds")
+                    _view.error_count = int(reflection_entry.get("error_count", 0) or 0)
+                    _view.markers = tuple(reflection_entry.get("key_markers") or ())
+                    _view.reflection_chars = len(str(reflection_entry.get("reflection", "")))
+                    _view.summary = _head(reflection_entry.get("reflection"), 160) or ""
                     mem_actions = reflection_entry.get("memory_actions") or []
-                    for act in mem_actions:
-                        topic = str(act.get("topic") or "")
-                        label = str(act.get("type") or "?") + (f"「{_head(topic, 40)}」" if topic else "")
-                        _log(f"[记忆]    {label}: {_head(act.get('content'), 60)}")
+                    _view.memory_actions = tuple(
+                        (
+                            str(act.get("type") or "?")
+                            + (f"「{_head(act.get('topic'), 40)}」" if act.get("topic") else ""),
+                            str(act.get("content") or ""),
+                        )
+                        for act in mem_actions
+                    )
+                    _view.memory_total = len(mem_actions)
+                    _view.memory_parse_failed = bool(
+                        reflection_entry.get("memory_actions_parse_failed")
+                    )
                     if mem_actions:
                         applied = apply_memory_actions(env, mem_actions)
-                        _log(f"[记忆]    落库 {applied}/{len(mem_actions)}")
+                        _view.memory_applied = applied
                     backlog = reflection_entry.get("backlog_candidates") or []
                     credits_before = _count_lines(data_root / "state" / "step_credits.jsonl")
                     skillhist_before = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
                     if backlog:
                         _added, touched = append_backlog_items_detailed(data_root, backlog)
-                        for t in touched:
-                            _log(f"[backlog] +{t.get('id')} \"{_head(t.get('summary'), 60)}\" "
-                                 f"({t.get('priority')} | count={t.get('count')})")
+                        _view.backlog_items = tuple(touched)
+                    _view.backlog_candidates = len(backlog)
                     # [技能] 资格——与 pipeline 同一判据（eligibility_reason），benchmark
                     # 的 outcome_hint 为空（task_dict 不带 outcome），与实际调用一致。
                     try:
                         _steps = TrajectoryExperienceLearner(data_root).load_task_steps(rec["id"])
-                        _elig = eligibility_reason(_steps, outcome_hint="")
-                        _log(f"[技能]    资格: {'✅' if _elig == 'ok' else '—'} ({_elig})")
+                        _view.skill_eligibility = eligibility_reason(_steps, outcome_hint="")
                     except Exception:  # noqa: BLE001 - eligibility display is best-effort
                         pass
                     _exp_before = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
@@ -1721,7 +1762,8 @@ def main() -> int:
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
                     _exp_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
                     if _exp_after > _exp_before:
-                        _log(f"[积累]   +{_exp_after - _exp_before} 经验 | 账本累计 {_exp_after}")
+                        _view.experience_delta = _exp_after - _exp_before
+                        _view.experience_total = _exp_after
                     if decision:
                         _augment_request_contract(data_root)  # 战役执行契约注入 objective
                         # 战役异步创建，先等它出现再计数（否则读到旧值、上限永不触发）。
@@ -1738,82 +1780,75 @@ def main() -> int:
                         _log(f"达到战役上限 {args.max_absorbed}，停止喂料"
                              f"（剩余 {len(remaining) - pos} 条记录未处理）")
                         _budget_reached = True  # break after progress save (resume-safe)
-                    # [技能] 生成事件：diff 生成历史的新增行
+                    # ⑨遗传·行为级：技能生成事件（diff 生成历史的新增行）
                     _hist_after = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
                     if _hist_after > skillhist_before:
                         try:
                             _hrows = [json.loads(l) for l in (data_root / "state" / "skill_generation_history.jsonl")
                                       .read_text(encoding="utf-8-sig").splitlines()[skillhist_before:] if l.strip()]
+                            _events = []
                             for r in _hrows:
                                 o = str(r.get("outcome") or "")
                                 if o == "created":
-                                    _log(f"[技能]    生成: {r.get('skill_name')} (task {r.get('task_id')})")
+                                    _events.append(("生成", f"{r.get('skill_name')} (task {r.get('task_id')})"))
                                 elif o == "skipped":
-                                    _log(f"[技能]    跳过: {r.get('reason')} ({r.get('skill_name')})")
+                                    _events.append(("跳过", f"{r.get('reason')} ({r.get('skill_name')})"))
                                 else:
-                                    _log(f"[技能]    失败: {r.get('reason') or 'unknown'} (task {r.get('task_id')})")
+                                    _events.append(("失败", f"{r.get('reason') or 'unknown'} (task {r.get('task_id')})"))
+                            _view.skill_events = tuple(_events)
                         except Exception:  # noqa: BLE001 - display only
                             pass
-                    # [信用] diff
+                    # ③归因：信用 diff
                     _credits_after = _count_lines(data_root / "state" / "step_credits.jsonl")
                     if _credits_after > credits_before:
                         try:
-                            _newc = [json.loads(l) for l in (data_root / "state" / "step_credits.jsonl")
-                                     .read_text(encoding="utf-8-sig").splitlines()[credits_before:] if l.strip()]
-                            _best = max(_newc, key=lambda c: float(c.get("credit") or 0))
-                            _worst = min(_newc, key=lambda c: float(c.get("credit") or 0))
-                            _log(f"[信用]    +{len(_newc)} 步计分: 最高 {_best.get('tool')} {_best.get('credit')} | "
-                                 f"最低 {_worst.get('tool')} {_worst.get('credit')}")
+                            _view.credits_new = tuple(
+                                json.loads(l) for l in (data_root / "state" / "step_credits.jsonl")
+                                .read_text(encoding="utf-8-sig").splitlines()[credits_before:] if l.strip()
+                            )
                         except Exception:  # noqa: BLE001 - display only
                             pass
-                    # [决策]——闸门状态推断 + _LAST_DECISION_TRACE 的 reason
+                    # ⑤触发：闸门状态推断 + _LAST_DECISION_TRACE 的 reason
                     _cad = os.environ.get("OUROBOROS_POST_TASK_EVOLUTION_CADENCE", "every_n:5")
                     _trace = dict(post_task_evolution._LAST_DECISION_TRACE)
+                    _view.decision_reason = str(_trace.get("reason") or "")
                     if decision:
                         _n_val = int(_cad.split(":")[1]) if ":" in _cad else 1
                         _counter_n = _read_json(data_root / "state" / "post_task_evolution_counter.json").get("n", 0)
-                        _cadence_txt = "llm" if _cad.startswith("llm") else (
+                        _view.decision_kind = "promote"
+                        _view.cadence_text = "llm" if _cad.startswith("llm") else (
                             "off" if _cad == "off" else
                             f"{_counter_n % max(1, _n_val)}/{_n_val}")
-                        _log(f"[决策]    cadence {_cadence_txt} | LLM: promote ✅ "
-                             f"理由: {_head(_trace.get('reason'), 90) or '—'}")
-                        _log(f"[决策]    目标: {_head(decision.get('objective'), 100)}"
-                             + (f" | backlog: {decision['backlog_id']}" if decision.get("backlog_id") else ""))
+                        _view.promote_objective = str(decision.get("objective") or "")
+                        _view.promote_backlog_id = str(decision.get("backlog_id") or "")
                     else:
                         _skip = _promote_skip_reason(data_root)
+                        _view.decision_kind = "skip" if _skip else "refuse"
                         if _skip:
-                            _log(f"[决策]    {_skip} → 跳过晋升")
-                        else:
-                            _log(f"[决策]    LLM: 不晋升 理由: {_head(_trace.get('reason'), 90) or '—'}")
-                    # [Track-A] diff 经验账本——extract_task_experience 在 maybe_promote 内
+                            _view.decision_reason = _skip
+                    # ③归因：Track-A diff 经验账本（extract_task_experience 在 maybe_promote 内）
                     try:
                         _after_rows = [json.loads(l) for l in (
                             (data_root / "state" / "evolution_experiences.jsonl").read_text(
                                 encoding="utf-8-sig")).splitlines() if l.strip()]
                         _exp_after_map = {r.get("task_id"): r for r in _after_rows if r.get("kind") == "task"}
                         _new_task_ids = set(_exp_after_map.keys()) - set(_pre_exp_task.keys())
-                        if _new_task_ids:
-                            for tid in list(_new_task_ids)[:2]:
-                                s = _experience_summary(_exp_after_map[tid])
-                                _log(f"[Track-A] {s}")
-                    except Exception:  # noqa: BLE001 - display only
-                        pass
-                    # [Track-B] diff cycle 经验行——consume_pending_cycles 在 maybe_promote 内
-                    try:
+                        _view.track_a = tuple(
+                            _experience_summary(_exp_after_map[tid])
+                            for tid in list(_new_task_ids)[:2]
+                        )
+                        # ③归因：Track-B diff cycle 经验行（consume_pending_cycles 在 maybe_promote 内）
                         _cy_after_map = {r.get("task_id"): r for r in _after_rows if r.get("kind") == "cycle"}
                         _new_cycle_ids = set(_cy_after_map.keys()) - set(_pre_exp_cy.keys())
-                        if _new_cycle_ids:
-                            for cid in list(_new_cycle_ids)[:2]:
-                                s = _experience_summary(_cy_after_map[cid])
-                                _log(f"[Track-B] {s}")
+                        _view.track_b = tuple(
+                            _experience_summary(_cy_after_map[cid])
+                            for cid in list(_new_cycle_ids)[:2]
+                        )
                     except Exception:  # noqa: BLE001 - display only
                         pass
-                    _log(f"[记录 {i:2d}/{len(corpus)}] {rec['id']}: 反思{len(str(reflection_entry.get('reflection', '')))}字 "
-                         f"rounds={usage_dict.get('rounds')} mem={len(mem_actions)} "
-                         # A present-but-unparseable block yields mem=0 as well; say so,
-                         # or the loss is invisible in the run's own artifacts.
-                         + ("mem_parse_failed " if reflection_entry.get("memory_actions_parse_failed") else "")
-                         + f"backlog={len(backlog)} seed={seeded} promote={bool(decision)}")
+                    # ⑪沉淀：累计周期账本随本记录块一起渲染（与旧 checkpoints 行同一口径）。
+                    _view.checkpoint_lines = tuple(checkpoint_block_lines(data_root))
+                    _emit_record_block(_view)
                     # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
                     # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
                     # cadence 边界（见循环上方的 wait_for_campaign_completion）。
@@ -1830,11 +1865,14 @@ def main() -> int:
                         _scratchpad_hygiene(data_root)
                     except Exception as exc:  # noqa: BLE001 - hygiene must not kill feeding
                         _log(f"scratchpad hygiene failed: {exc}")
-                    snapshot_checkpoint_summary(data_root)
                     if i % 5 == 0:
                         _milestone(data_root, i)
                 except Exception as exc:  # noqa: BLE001 - per-record fault isolation
-                    _log(f"record {i:2d}/{len(corpus)} {rec['id']}: ✗ 失败: {exc}")
+                    # A record that faulted still reports what it harvested before the
+                    # fault (the block is display-only and was not emitted yet).
+                    if _view is not None:
+                        _emit_record_block(_view)
+                    _log(f"记录 {i:2d}/{len(corpus)} {rec['id']}: ✗ 失败: {exc}")
                     progress.setdefault("failures", []).append({"id": rec["id"], "error": str(exc)})
                 progress["last_index"] = i
                 progress["records_processed"] = i
@@ -1917,8 +1955,10 @@ def main() -> int:
     }
     (session_dir / "session_ledger.json").write_text(
         json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
-    _log(f"ledger: {session_dir / 'session_ledger.json'}")
-    _log(f"吸收 commit（{args.arm}-evolved tag 相对起点）: {commits.strip() or '(无)'}")
+    for _line in leap_report.render_session_foot(
+        arm=args.arm, ledger_path=session_dir / "session_ledger.json", commits=commits
+    ):
+        _log(_line)
     if _LOG_FH is not None:
         _LOG_FH.close()
     return 0
