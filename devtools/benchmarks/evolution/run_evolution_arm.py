@@ -375,6 +375,13 @@ def has_pending_request(data_root: pathlib.Path) -> bool:
     return (data_root / "state" / "post_task_evolution_request.json").is_file()
 
 
+# Poll cadence + dead-campaign threshold for the campaign waits. A RUNNING
+# transaction with an idle queue for this many ticks means the evolution task is
+# gone and will never commit/resolve (only a genuinely interrupted session).
+_WAIT_POLL_SECS = 10
+_WAIT_STALE_TICKS = 6  # ~60s
+
+
 def wait_for_campaign_start(data_root: pathlib.Path, timeout: float = 180) -> bool:
     """Wait until a just-requested campaign appears in campaign.json.
 
@@ -393,6 +400,62 @@ def wait_for_campaign_start(data_root: pathlib.Path, timeout: float = 180) -> bo
         time.sleep(3)
     _log(f"[等待] ⚠️ 战役未在 {timeout:.0f}s 内启动（请求可能被监督者拒绝）")
     return False
+
+
+def wait_for_campaign_execution(data_root: pathlib.Path, server: IsolatedServer,
+                                timeout: float = 3600) -> None:
+    """Wait until the in-flight campaign stops EXECUTING (its commit lands).
+
+    The intended overlap is reflection-with-ABSORPTION: the restart + boot
+    reconciliation window is dead time, and the next block's reflections fill it.
+    Feeding while the cycle is still EXECUTING instead puts reflection work and the
+    evolution task on the machine at the same time, which both competes for
+    budget and muddies what the campaign itself is being measured on. So a RUNNING
+    campaign (active transaction, no reviewed commit yet) holds the feed until it
+    reaches ABSORBING (commit recorded) or ends without one.
+
+    Dead-campaign detection mirrors wait_for_campaign_completion: RUNNING with an
+    idle queue for ~60s and no pending request means the task died and will never
+    commit — return instead of stalling.
+    """
+    if get_campaign_state(data_root) != CampaignState.RUNNING:
+        return
+    start = time.time()
+    hard_cap = max(timeout * 2, 7200.0)
+    tick = 0
+    warned = False
+    stale_ticks = 0
+    while time.time() - start < hard_cap:
+        try:
+            _campaign_transitions(data_root)
+        except Exception:  # noqa: BLE001 - display only
+            pass
+        if get_campaign_state(data_root) != CampaignState.RUNNING:
+            _log("[等待] 战役执行完成（commit 已落定）——下一轮反思与吸收并行进行")
+            return
+        if not has_pending_request(data_root):
+            stale_ticks = stale_ticks + 1 if server.is_queue_idle() else 0
+            if stale_ticks >= _WAIT_STALE_TICKS:
+                _log("[等待] ⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
+                return
+        else:
+            stale_ticks = 0
+        elapsed = time.time() - start
+        if elapsed >= timeout and not warned:
+            warned = True
+            _log(f"[等待] ⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在执行——继续等待"
+                 f"（硬上限 {hard_cap:.0f}s）")
+        tick += 1
+        if tick % 6 == 0:
+            try:
+                status = _campaign_live_status(data_root)
+                if status:
+                    _log(f"  [等待 {int(elapsed)}s] {status}")
+            except Exception:  # noqa: BLE001 - display only
+                pass
+        time.sleep(_WAIT_POLL_SECS)
+    _log(f"[等待] ⚠️ 硬超时 {hard_cap:.0f}s，战役仍在执行——继续喂料"
+         f"（吸收会在后续记录或下次 boot 自检中完成）")
 
 
 def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer,
@@ -444,7 +507,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
         # = 任务已死（如会话被中断），永远不会自己 resolve —— 不必等到超时。
         if state == CampaignState.RUNNING and not has_pending_request(data_root):
             stale_ticks = stale_ticks + 1 if server.is_queue_idle() else 0
-            if stale_ticks >= 6:  # ~60s 持续空闲
+            if stale_ticks >= _WAIT_STALE_TICKS:
                 _log("[等待] ⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
                 return
         else:
@@ -466,7 +529,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
                     _log(f"  [等待 {int(elapsed)}s] {status}")
             except Exception:  # noqa: BLE001 - display only
                 pass
-        time.sleep(10)
+        time.sleep(_WAIT_POLL_SECS)
     _log(f"[等待] ⚠️ 硬超时 {hard_cap:.0f}s，战役仍未结束——放弃等待并收尾"
          f"（战役会被 server.stop() 中断；已提交的 commit 会在下次 resume 的启动自检中吸收/放弃）")
 
@@ -1568,6 +1631,12 @@ def main() -> int:
                 i = start_idx + pos
                 _budget_reached = False
                 try:
+                    # 时序语义：一个战役先执行完（commit 落定），下一轮反思才开始，
+                    # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
+                    # 执行期喂料会让反思和进化任务同时抢预算，也污染战役本身的观测。
+                    if get_campaign_state(data_root) == CampaignState.RUNNING:
+                        _log("[等待] 在途战役仍在执行——等它提交后再开始下一轮反思")
+                        wait_for_campaign_execution(data_root, server, timeout=args.campaign_timeout)
                     _log(f"── [记录 {i:2d}/{len(corpus)}] {rec['id']} (L{rec.get('level', '?')}) " + "─" * 22)
                     task_dict = {"id": rec["id"], "text": rec["task"], "drive_root": str(data_root)}
                     llm_trace = load_trace_from_path(rec["trace_ref"], base_dir=args.corpus.parent)

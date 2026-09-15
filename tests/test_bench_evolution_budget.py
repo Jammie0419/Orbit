@@ -114,6 +114,100 @@ def test_count_started_campaigns_reads_history_plus_in_flight(tmp_path):
     assert arm.count_started_campaigns(tmp_path / "missing-root") == 0
 
 
+# ---------------------------------------------------------------------------
+# Execution vs absorption overlap
+# ---------------------------------------------------------------------------
+
+class _FakeServer:
+    def __init__(self, idle: bool = True):
+        self.idle = idle
+
+    def is_queue_idle(self, timeout: float = 5) -> bool:
+        return self.idle
+
+
+def _fast_poll(monkeypatch, poll: float = 0.05, stale_ticks: int = 3):
+    monkeypatch.setattr(arm, "_WAIT_POLL_SECS", poll)
+    monkeypatch.setattr(arm, "_WAIT_STALE_TICKS", stale_ticks)
+
+
+def test_execution_wait_returns_at_once_when_not_running(tmp_path, monkeypatch):
+    """IDLE and ABSORBING campaigns must not hold the feed: the reflection is
+    supposed to overlap absorption, and there is nothing to wait for when the
+    cycle has not started or has already committed."""
+    _fast_poll(monkeypatch)
+    for tx_count, active in ((0, False), (0, True)):
+        _write_campaign(tmp_path, tx_count=tx_count, active=active)
+        if active:
+            # ABSORBING: the transaction already carries the reviewed commit.
+            camp = json.loads((tmp_path / "state" / "evolution_campaign.json").read_text())
+            camp["active_transaction"]["commit_sha"] = "a" * 40
+            (tmp_path / "state" / "evolution_campaign.json").write_text(json.dumps(camp))
+            assert arm.get_campaign_state(tmp_path) == arm.CampaignState.ABSORBING
+        start = time.time()
+        arm.wait_for_campaign_execution(tmp_path, _FakeServer())
+        assert time.time() - start < 0.5
+
+
+def test_execution_wait_releases_when_the_commit_lands(tmp_path, monkeypatch):
+    """The whole point: a RUNNING campaign (no commit) blocks the next reflection
+    until the commit lands; then feeding resumes and overlaps absorption."""
+    _fast_poll(monkeypatch)
+    _write_campaign(tmp_path, tx_count=0, active=True)
+    assert arm.get_campaign_state(tmp_path) == arm.CampaignState.RUNNING
+
+    def _commit_late():
+        time.sleep(0.6)
+        _write_campaign(tmp_path, tx_count=0, active=True)
+        camp = json.loads((tmp_path / "state" / "evolution_campaign.json").read_text())
+        camp["active_transaction"]["commit_sha"] = "b" * 40
+        (tmp_path / "state" / "evolution_campaign.json").write_text(json.dumps(camp))
+
+    thread = threading.Thread(target=_commit_late)
+    thread.start()
+    try:
+        arm.wait_for_campaign_execution(tmp_path, _FakeServer(idle=False), timeout=30)
+    finally:
+        thread.join()
+
+    assert arm.get_campaign_state(tmp_path) == arm.CampaignState.ABSORBING
+
+
+def test_execution_wait_escapes_a_dead_task(tmp_path, monkeypatch):
+    """A RUNNING transaction whose queue has been idle with no pending request is
+    a dead task (interrupted session) — it will never commit, so the wait must
+    return rather than stall the whole feed."""
+    _fast_poll(monkeypatch, stale_ticks=3)
+    _write_campaign(tmp_path, tx_count=0, active=True)
+    start = time.time()
+    arm.wait_for_campaign_execution(tmp_path, _FakeServer(idle=True), timeout=30)
+    assert time.time() - start < 5
+    assert arm.get_campaign_state(tmp_path) == arm.CampaignState.RUNNING  # untouched
+
+
+def test_execution_wait_keeps_waiting_while_the_task_is_busy(tmp_path, monkeypatch):
+    """A busy queue is not a dead task: the wait keeps going past the stale
+    threshold instead of declaring the campaign dead."""
+    _fast_poll(monkeypatch, poll=0.02, stale_ticks=2)
+    _write_campaign(tmp_path, tx_count=0, active=True)
+    stop = threading.Event()
+
+    def _stop_soon():
+        stop.wait(0.5)
+        _write_campaign(tmp_path, tx_count=0, active=True)
+        camp = json.loads((tmp_path / "state" / "evolution_campaign.json").read_text())
+        camp["active_transaction"]["commit_sha"] = "c" * 40
+        (tmp_path / "state" / "evolution_campaign.json").write_text(json.dumps(camp))
+
+    thread = threading.Thread(target=_stop_soon)
+    thread.start()
+    try:
+        arm.wait_for_campaign_execution(tmp_path, _FakeServer(idle=False), timeout=30)
+    finally:
+        thread.join()
+    assert arm.get_campaign_state(tmp_path) == arm.CampaignState.ABSORBING
+
+
 @pytest.mark.parametrize("cadence,expected", [
     ("every_n:5", 5), ("every_n:1", 1), ("every_n:10", 10),
     ("llm", 5), ("off", 5), ("every_n:bogus", 5),
