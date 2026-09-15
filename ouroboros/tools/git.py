@@ -503,6 +503,54 @@ def _stage_candidate_for_review(
     return classification_paths, advisory_paths, None
 
 
+REQUIRE_ADVISORY_ENV = "OUROBOROS_REQUIRE_ADVISORY_REVIEW"
+
+
+def _refuse_advisory_bypass_when_required(
+    ctx: ToolContext,
+    commit_message: str,
+    advisory_bypassed: bool,
+    commit_start: float,
+) -> Optional[Dict[str, Any]]:
+    """Refuse the audited advisory bypass when the run demands a real pre-review.
+
+    The bypass exists so an agent is never wedged by an unavailable advisory route,
+    and it is audited (``advisory_review_bypassed``). A run that MEASURES reviewed
+    self-modification cannot accept it: with advisory skipped and the test preflight
+    disabled, the only review left on a landed commit is triad + scope, so the
+    commit's "reviewed" claim would rest on less than it says. Setting
+    ``OUROBOROS_REQUIRE_ADVISORY_REVIEW=1`` removes the escape hatch — the agent has
+    to run ``advisory_review`` against the current diff first.
+    """
+    if not advisory_bypassed:
+        return None
+    if str(os.environ.get(REQUIRE_ADVISORY_ENV, "0") or "0").strip() != "1":
+        return None
+    msg = (
+        "⚠️ ADVISORY_REVIEW_REQUIRED: this run requires the advisory pre-review, so "
+        "commit_reviewed will not bypass it.\n"
+        "Run advisory_review(commit_message=...) on the CURRENT diff, address its "
+        "findings, then call commit_reviewed WITHOUT skip_advisory_review."
+    )
+    try:
+        _record_commit_attempt(
+            ctx,
+            commit_message,
+            "blocked",
+            block_reason="advisory_review_required",
+            block_details=msg,
+            duration_sec=time.time() - commit_start,
+            phase="preflight",
+        )
+    except Exception:
+        log.debug("Failed to record advisory-required refusal", exc_info=True)
+    return {
+        "status": "blocked",
+        "message": msg,
+        "block_reason": "advisory_review_required",
+    }
+
+
 def _run_reviewed_stage_cycle(
     ctx: ToolContext,
     commit_message: str,
@@ -519,6 +567,13 @@ def _run_reviewed_stage_cycle(
     require_release_tag: bool = True,
 ) -> Dict[str, Any]:
     skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
+    # Before ANY staging: a refusal must not leave a staged candidate behind (the
+    # tests-preflight path has to git-reset for exactly that reason).
+    _advisory_required = _refuse_advisory_bypass_when_required(
+        ctx, commit_message, skip_advisory_pre_review, commit_start,
+    )
+    if _advisory_required is not None:
+        return _advisory_required
     classification_paths, advisory_paths, stage_error = _stage_candidate_for_review(
         ctx,
         commit_message,

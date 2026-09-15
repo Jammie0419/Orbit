@@ -1671,6 +1671,55 @@ class TestBypassPathTestsRun:
         assert outcome["block_reason"] == "tests_preflight_blocked"
         assert "TESTS_PREFLIGHT_BLOCKED" in outcome["message"]
 
+    def test_required_advisory_refuses_the_bypass_before_any_review(self, tmp_path, monkeypatch):
+        """OUROBOROS_REQUIRE_ADVISORY_REVIEW=1 removes the audited escape hatch: a
+        run that measures REVIEWED self-modification must not land a commit whose
+        only review was triad + scope (with the test preflight off, an advisory
+        bypass leaves nothing else). The refusal happens before staging/reviews."""
+        from ouroboros.tools import git as git_mod
+
+        ctx = self._make_staged_repo(tmp_path)
+        monkeypatch.setenv("OUROBOROS_REQUIRE_ADVISORY_REVIEW", "1")
+        monkeypatch.setattr(git_mod, "_check_advisory_freshness", lambda *a, **kw: None)
+        called = {"preflight": 0, "parallel": 0}
+        monkeypatch.setattr(
+            git_mod, "_run_review_preflight_tests",
+            lambda *a, **kw: called.__setitem__("preflight", called["preflight"] + 1) or "FAILED",
+        )
+        monkeypatch.setattr(
+            git_mod, "_run_parallel_review",
+            lambda *a, **kw: called.__setitem__("parallel", called["parallel"] + 1)
+            or (None, {}, "", []),
+        )
+
+        outcome = git_mod._run_reviewed_stage_cycle(
+            ctx,
+            commit_message="required advisory",
+            commit_start=0.0,
+            skip_advisory_pre_review=True,
+        )
+
+        assert outcome["status"] == "blocked"
+        assert outcome["block_reason"] == "advisory_review_required"
+        assert "ADVISORY_REVIEW_REQUIRED" in outcome["message"]
+        assert called == {"preflight": 0, "parallel": 0}, (
+            "the refusal must precede the preflight and the triad+scope review"
+        )
+
+    def test_required_advisory_only_targets_the_bypass(self, tmp_path, monkeypatch):
+        """The requirement removes the BYPASS, not the commit path: a call that does
+        not bypass advisory is untouched by the guard."""
+        from ouroboros.tools import git as git_mod
+
+        ctx = self._make_staged_repo(tmp_path)
+        monkeypatch.setenv("OUROBOROS_REQUIRE_ADVISORY_REVIEW", "1")
+        assert git_mod._refuse_advisory_bypass_when_required(ctx, "m", False, 0.0) is None
+        assert git_mod._refuse_advisory_bypass_when_required(ctx, "m", True, 0.0) is not None
+
+        # ...and without the requirement the bypass keeps working (no refusal).
+        monkeypatch.setenv("OUROBOROS_REQUIRE_ADVISORY_REVIEW", "0")
+        assert git_mod._refuse_advisory_bypass_when_required(ctx, "m", True, 0.0) is None
+
     def test_failed_bypass_preflight_stales_bypass_record(self, tmp_path, monkeypatch):
         """A failed bypass attempt must not leave a fresh bypass snapshot."""
         from ouroboros.review_state import load_state

@@ -303,6 +303,11 @@ class IsolatedServer:
         # Precedent: devtools/benchmarks/swe_bench_pro/e1v2/run_pro.py passes the same
         # flag to its benchmark containers.
         env.setdefault("OUROBOROS_PRE_PUSH_TESTS", "0")
+        # ...and the review the commit CLAIMS must actually happen. With the test
+        # preflight off, an audited advisory bypass would leave a landed commit
+        # reviewed by triad + scope only, so the arm requires the independent
+        # pre-review instead. An operator-supplied value still wins.
+        env.setdefault("OUROBOROS_REQUIRE_ADVISORY_REVIEW", "1")
         return env
 
     def _patch_settings_ports(self) -> None:
