@@ -38,16 +38,23 @@ import pathlib
 import subprocess
 import sys
 import time
+from enum import Enum
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 
 from devtools.benchmarks.common.server_runner import (
     IsolatedServer,
-    absorbed_cycles_done,
     build_isolated_settings,
     seed_owner_state,
 )
+
+
+class CampaignState(Enum):
+    """战役生命周期状态（从 campaign.json 推导）"""
+    IDLE = "idle"                # 无战役在途（可以 promote）
+    RUNNING = "running"          # 战役执行中（未提交）
+    ABSORBING = "absorbing"      # 已提交，等待吸收/放弃（bounce 中）
 
 REPO_DIR = pathlib.Path(__file__).resolve().parents[3]
 
@@ -335,6 +342,157 @@ def _experience_summary(exp: dict) -> str:
 def _git(args: list[str], cwd: pathlib.Path) -> tuple[int, str]:
     p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+# ---------------------------------------------------------------------------
+# Campaign state management (boundary-synchronized processing)
+# ---------------------------------------------------------------------------
+
+def get_campaign_state(data_root: pathlib.Path) -> CampaignState:
+    """Derive campaign state from campaign.json's active_transaction."""
+    camp = _read_json(data_root / "state" / "evolution_campaign.json")
+    tx = camp.get("active_transaction")
+    if not isinstance(tx, dict) or not tx:
+        return CampaignState.IDLE
+    if not str(tx.get("commit_sha") or "").strip():
+        return CampaignState.RUNNING
+    return CampaignState.ABSORBING
+
+
+def _campaign_last_outcome(data_root: pathlib.Path) -> str:
+    """Last resolved campaign outcome: 'absorbed' | 'abandoned' | '' (none yet)."""
+    camp = _read_json(data_root / "state" / "evolution_campaign.json")
+    history = camp.get("transaction_history") or []
+    for tx in reversed(history):
+        outcome = str(tx.get("cycle_outcome") or "")
+        if outcome in ("absorbed", "abandoned", "no_op"):
+            return outcome
+    return ""
+
+
+def has_pending_request(data_root: pathlib.Path) -> bool:
+    """A promotion request was written but not yet consumed by the supervisor."""
+    return (data_root / "state" / "post_task_evolution_request.json").is_file()
+
+
+def wait_for_campaign_start(data_root: pathlib.Path, timeout: float = 180) -> bool:
+    """Wait until a just-requested campaign appears in campaign.json.
+
+    After maybe_promote writes the request, the supervisor needs a moment to
+    pick it up. Without this wait, a completion-wait that only checks
+    ``active_transaction`` sees IDLE and returns immediately, letting
+    server.stop() kill the server before the campaign ever runs.
+    """
+    if get_campaign_state(data_root) != CampaignState.IDLE:
+        return True
+    start = time.time()
+    while time.time() - start < timeout:
+        if get_campaign_state(data_root) != CampaignState.IDLE:
+            _log("[等待] 战役已启动")
+            return True
+        time.sleep(3)
+    _log(f"[等待] ⚠️ 战役未在 {timeout:.0f}s 内启动（请求可能被监督者拒绝）")
+    return False
+
+
+def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer,
+                                 timeout: float = 3600, *, wait_start: bool = True) -> None:
+    """Wait until the in-flight campaign resolves (absorbed or abandoned).
+
+    ``timeout`` is a SOFT threshold: past it we log a loud warning and keep
+    waiting (a real campaign can run 45+ min and must not be cut short) up to a
+    hard cap of 2x, after which we give up so a wedged campaign cannot hang the
+    session forever.
+
+    Dead-campaign detection: an ``active_transaction`` without a commit while
+    the queue is idle for ~60s means the evolution task died (session was
+    interrupted mid-campaign). It will never resolve on its own — return
+    instead of stalling for the full timeout.
+
+    Drives the restart bounce while waiting (boot reconciliation performs the
+    absorb/abandon transition) and prints transitions via _campaign_transitions
+    so [战役#N] ⤷ commit / ⤷ absorbed|abandoned appear as they happen.
+    """
+    if wait_start and not wait_for_campaign_start(data_root):
+        return
+    start = time.time()
+    # Hard cap: never cut a plausible campaign short even if the caller passed a
+    # small --campaign-timeout. Measured campaigns run 23-44 min; 2h covers them
+    # with margin, and only a genuinely wedged campaign reaches it.
+    hard_cap = max(timeout * 2, 7200.0)
+    tick = 0
+    warned = False
+    stale_ticks = 0
+    while time.time() - start < hard_cap:
+        try:
+            _campaign_transitions(data_root)
+        except Exception:  # noqa: BLE001 - display only
+            pass
+        state = get_campaign_state(data_root)
+        if state == CampaignState.IDLE:
+            outcome = _campaign_last_outcome(data_root)
+            if outcome == "absorbed":
+                _log("[等待] 战役已吸收 ✅——继续处理")
+            elif outcome == "abandoned":
+                _log("[等待] 战役已放弃 ❌（未吸收，计入完成数）——继续处理")
+            elif outcome == "no_op":
+                _log("[等待] 战役 no_op（未提交）——继续处理")
+            else:
+                _log("[等待] 战役已结束——继续处理")
+            return
+        # 死战役检测：无 commit 的 active_transaction + 队列空闲 + 无待消费请求
+        # = 任务已死（如会话被中断），永远不会自己 resolve —— 不必等到超时。
+        if state == CampaignState.RUNNING and not has_pending_request(data_root):
+            stale_ticks = stale_ticks + 1 if server.is_queue_idle() else 0
+            if stale_ticks >= 6:  # ~60s 持续空闲
+                _log("[等待] ⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
+                return
+        else:
+            stale_ticks = 0
+        try:
+            server.maybe_bounce_for_restart()  # drive boot reconciliation (absorb/abandon)
+        except Exception:  # noqa: BLE001 - bounce failure must not kill the wait
+            pass
+        elapsed = time.time() - start
+        if elapsed >= timeout and not warned:
+            warned = True
+            _log(f"[等待] ⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在进行——继续等待"
+                 f"（硬上限 {hard_cap:.0f}s；战况可用 --campaign-timeout 调大）")
+        tick += 1
+        if tick % 6 == 0:  # ~60s 心跳（战役可能跑 30-45 分钟）
+            try:
+                status = _campaign_live_status(data_root)
+                if status:
+                    _log(f"  [等待 {int(elapsed)}s] {status}")
+            except Exception:  # noqa: BLE001 - display only
+                pass
+        time.sleep(10)
+    _log(f"[等待] ⚠️ 硬超时 {hard_cap:.0f}s，战役仍未结束——放弃等待并收尾"
+         f"（战役会被 server.stop() 中断；已提交的 commit 会在下次 resume 的启动自检中吸收/放弃）")
+
+
+def count_started_campaigns(data_root: pathlib.Path) -> int:
+    """Count campaigns started in this session (history entries + in-flight).
+
+    A campaign is 'started' when its transaction exists (completed history row
+    or the active_transaction). Used as the session's max_absorbed budget:
+    absorbed / abandoned / no_op all count — a finished campaign is a finished
+    campaign, regardless of whether the commit landed.
+    """
+    camp = _read_json(data_root / "state" / "evolution_campaign.json")
+    history = camp.get("transaction_history") or []
+    tx = camp.get("active_transaction")
+    return len(history) + (1 if isinstance(tx, dict) and tx else 0)
+
+
+def parse_cadence_n(cadence: str) -> int:
+    """Cadence N (every_n:N -> N). Fallback 5 for llm/off/unknown."""
+    if cadence.startswith("every_n:"):
+        try:
+            return max(1, int(cadence.split(":", 1)[1]))
+        except (IndexError, ValueError):
+            return 5
+    return 5
 
 
 # ---------------------------------------------------------------------------
@@ -1138,9 +1296,13 @@ def main() -> int:
                     help="OUROBOROS_POST_TASK_EVOLUTION_CADENCE（off | llm | every_n:N；"
                          "默认 None = 依次取 .env/环境变量，再取 every_n:5）")
     ap.add_argument("--budget", type=float, default=200.0, help="Per-session TOTAL_BUDGET (USD)")
-    ap.add_argument("--campaign-timeout", type=float, default=600.0,
-                    help="Seconds to poll for one campaign cycle after each promote")
-    ap.add_argument("--max-absorbed", type=int, default=10, help="Stop feeding after N absorbed cycles (spec §3.5)")
+    ap.add_argument("--campaign-timeout", type=float, default=3600.0,
+                    help="（通常不用指定）战役耗时超过该秒数时打印警告——但会继续等，"
+                         "直到 max(2x, 2h) 的硬上限才放弃。实测单场战役 23-44 分钟，"
+                         "默认 3600 足够；收到警告说明战役异常，可调大重跑")
+    ap.add_argument("--max-absorbed", type=int, default=10,
+                    help="本次 session 最多推进的战役数（每个 cadence 块一个；"
+                         "吸收/放弃/no_op 都算完成。resume 时重置配额）")
     ap.add_argument("--dry-run", action="store_true",
                     help="Validate corpus→trace→pipeline wiring at zero LLM cost (no server, no LLM calls)")
     ap.add_argument("--deploy-tasks", type=pathlib.Path,
@@ -1247,7 +1409,8 @@ def main() -> int:
             _log("警告: 进度文件与本次参数不一致（arm/corpus），继续将产生偏差")
     else:
         progress = {"arm": args.arm, "corpus": str(args.corpus), "sha_start": None,
-                    "last_index": 0, "records_processed": 0, "failures": []}
+                    "last_index": 0, "records_processed": 0,
+                    "campaigns_this_session": 0, "failures": []}
 
     _log(f"session: {session_dir}  arm={args.arm}  cadence={args.cadence}  budget=${args.budget}"
          + ("  （resume 续跑）" if resume else ""))
@@ -1357,8 +1520,13 @@ def main() -> int:
     remaining = corpus[start_idx:]
     if remaining:
         server = IsolatedServer(clone, data_root, settings_path)
-        absorbed_before = absorbed_cycles_done(data_root)
-        sha_before = server.current_sha()
+        # Baseline for this session's campaign budget: campaigns already present
+        # before we start (previous sessions' history) don't count against
+        # --max-absorbed — each session (including --resume) gets a fresh budget.
+        _campaigns_baseline = count_started_campaigns(data_root)
+        _cadence_n = parse_cadence_n(args.cadence)
+        _log(f"session 战役预算: max={args.max_absorbed} | cadence 块大小={_cadence_n} | "
+             f"历史战役基线={_campaigns_baseline}")
         try:
             _log(f"starting isolated server on {server.base_url} …")
             server.start(ready_timeout=240)
@@ -1372,9 +1540,7 @@ def main() -> int:
                 raise SystemExit(f"provider 探活异常: {exc}")
             for pos, rec in enumerate(remaining, 1):
                 i = start_idx + pos
-                if absorbed_cycles_done(data_root) - absorbed_before >= args.max_absorbed:
-                    _log(f"达到吸收周期上限 {args.max_absorbed}，提前停止喂料（剩余 {len(remaining) - pos + 1} 条）")
-                    break
+                _budget_reached = False
                 try:
                     _log(f"── [记录 {i:2d}/{len(corpus)}] {rec['id']} (L{rec.get('level', '?')}) " + "─" * 22)
                     task_dict = {"id": rec["id"], "text": rec["task"], "drive_root": str(data_root)}
@@ -1442,12 +1608,33 @@ def main() -> int:
                         _pre_rows = []
                     _pre_exp_task = {r.get("task_id"): r for r in _pre_rows if r.get("kind") == "task"}
                     _pre_exp_cy = {r.get("task_id"): r for r in _pre_rows if r.get("kind") == "cycle"}
+                    # Cadence 边界同步：本条记录是否将触发 promote（every_n:N 的第 N 条）？
+                    # 触发的瞬间如果有战役在途 → 先等它吸收/放弃，再提交新的 promote。
+                    # 这保证：边界反射可以与上一个战役并行（吸收期间的下一轮反思），
+                    # 但 promote 请求绝不与在途战役重叠（一次只跑一个战役）。
+                    _at_boundary = False
+                    if args.cadence.startswith("every_n:"):
+                        _cn = parse_cadence_n(args.cadence)
+                        _counter_n = int(_read_json(
+                            data_root / "state" / "post_task_evolution_counter.json").get("n") or 0)
+                        _at_boundary = (_counter_n + 1) % _cn == 0
+                    if _at_boundary:
+                        _st = get_campaign_state(data_root)
+                        if _st != CampaignState.IDLE or has_pending_request(data_root):
+                            _log(f"[等待] cadence 边界（{_cn} 条已满）——等待上一个战役完成（状态: {_st.value}）")
+                            wait_for_campaign_completion(data_root, server, timeout=args.campaign_timeout)
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
                     _exp_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
                     if _exp_after > _exp_before:
                         _log(f"[积累]   +{_exp_after - _exp_before} 经验 | 账本累计 {_exp_after}")
                     if decision:
                         _augment_request_contract(data_root)  # 战役执行契约注入 objective
+                        _session_campaigns = count_started_campaigns(data_root) - _campaigns_baseline
+                        _log(f"[战役]    第 {_session_campaigns}/{args.max_absorbed} 个战役已提交请求")
+                        if _session_campaigns >= args.max_absorbed:
+                            _log(f"达到战役上限 {args.max_absorbed}，停止喂料"
+                                 f"（剩余 {len(remaining) - pos} 条记录未处理）")
+                            _budget_reached = True  # break after progress save (resume-safe)
                     # [技能] 生成事件：diff 生成历史的新增行
                     _hist_after = _count_lines(data_root / "state" / "skill_generation_history.jsonl")
                     if _hist_after > skillhist_before:
@@ -1521,10 +1708,13 @@ def main() -> int:
                     _log(f"[记录 {i:2d}/{len(corpus)}] {rec['id']}: 反思{len(str(reflection_entry.get('reflection', '')))}字 "
                          f"rounds={usage_dict.get('rounds')} mem={len(mem_actions)} "
                          f"backlog={len(backlog)} seed={seeded} promote={bool(decision)}")
-                    poll_campaign_progress(data_root, timeout_sec=args.campaign_timeout)
-                    # Restart driver at the record boundary: a cycle that reached
-                    # waiting_for_restart holds the campaign's active_transaction
-                    # (enqueue gate) until a bounce lets boot reconciliation absorb it.
+                    # 战役进展追踪（轻量）：打印 [战役#N] 开/commit/终态 转换，并驱动
+                    # bounce（request_restart 后的启动自检完成吸收）。完整等待只发生在
+                    # cadence 边界（见循环上方的 wait_for_campaign_completion）。
+                    try:
+                        _campaign_transitions(data_root)
+                    except Exception:  # noqa: BLE001 - display only
+                        pass
                     try:
                         server.maybe_bounce_for_restart()
                     except Exception as exc:  # noqa: BLE001 - bounce failure ≠ feed failure
@@ -1542,14 +1732,32 @@ def main() -> int:
                     progress.setdefault("failures", []).append({"id": rec["id"], "error": str(exc)})
                 progress["last_index"] = i
                 progress["records_processed"] = i
+                progress["campaigns_this_session"] = count_started_campaigns(data_root) - _campaigns_baseline
                 progress_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2), encoding="utf-8")
+                if _budget_reached:
+                    break
+            # 末尾不满一个块的处理说明：cadence every_n:N 只在第 N 条触发晋升，
+            # 因此结尾不足 N 条的尾巴会被正常反思（经验/记忆/技能照常积累）但
+            # 不触发晋升——这是 cadence 语义，不是丢数据。
+            _session_campaigns = count_started_campaigns(data_root) - _campaigns_baseline
+            _processed = int(progress.get("last_index", 0)) - start_idx
+            if not _budget_reached and _processed > 0 and _processed % _cadence_n != 0:
+                _log(f"[提示] 本次 session 处理 {_processed} 条，末尾 {_processed % _cadence_n} 条"
+                     f"不足一个 cadence 块（N={_cadence_n}）——已积累反思/经验，未触发晋升"
+                     f"（共 {_session_campaigns} 个战役；resume 会从下一条继续，尾巴可与其后的记录凑满一块）")
         finally:
-            # Wait for the in-flight campaign before stopping (§10.8-5: the server must
-            # stay up across the whole corpus; stop only after the last campaign).
-            try:
-                server.wait_for_absorb(prev_sha=sha_before, prev_absorbed=absorbed_before, timeout=1800)
-            except Exception as exc:  # noqa: BLE001
-                _log(f"wait_for_absorb: {exc}")
+            # Wait for the last campaign before stopping (§10.8-5: the server must
+            # stay up across the whole corpus; stop only after the last campaign
+            # resolves). Covers BOTH cases: a campaign already running, and a
+            # request just written whose campaign has not started yet (the
+            # supervisor needs a moment to consume it) — otherwise server.stop()
+            # would kill the server before the campaign ever runs.
+            if has_pending_request(data_root) or get_campaign_state(data_root) != CampaignState.IDLE:
+                _log("[等待] 语料喂完——等待最后一个战役完成…")
+                try:
+                    wait_for_campaign_completion(data_root, server, timeout=args.campaign_timeout)
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"wait_for_campaign_completion: {exc}")
             # 统一部署窗口（V2/V3）：语料喂完 + 最后一个战役落账后执行
             # （含 max-absorbed / 预算触发提前停机的收尾路径）。幂等：phase=post 后不再动作。
             if args.arm in ("V2", "V3") and args.deploy:

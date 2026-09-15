@@ -315,6 +315,21 @@ class IsolatedServer:
     def _state(self, timeout: float = 5) -> dict:
         return _api(self.base_url, "GET", "/api/state", timeout=timeout)
 
+    def is_queue_idle(self, timeout: float = 5) -> bool:
+        """True when nothing is pending or running (dead-campaign probe).
+
+        Used by the driver's completion wait: an ``active_transaction`` without
+        a commit whose queue is idle means the evolution task died (session
+        interrupted mid-campaign) — the transaction will never resolve on its
+        own, so waiting for it would stall until the timeout.
+        """
+        try:
+            st = self._state(timeout=timeout)
+        except (urllib.error.URLError, OSError, ValueError):
+            return False
+        return (int(st.get("pending_count") or 0) == 0
+                and int(st.get("running_count") or 0) == 0)
+
     def _wait_ready(self, timeout: float) -> None:
         """Poll until the SUPERVISOR is ready (see `supervisor_state_is_ready`)."""
         deadline = time.time() + timeout
