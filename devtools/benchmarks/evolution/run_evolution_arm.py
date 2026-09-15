@@ -1639,6 +1639,10 @@ def main() -> int:
         # --max-absorbed — each session (including --resume) gets a fresh budget.
         _campaigns_baseline = count_started_campaigns(data_root)
         _cadence_n = parse_cadence_n(args.cadence)
+        # Bound BEFORE the try: the finally clause reports why feeding stopped, and a
+        # failure before the first record (server start / provider probe) must not turn
+        # into a NameError that masks the real error.
+        _budget_reached = False
         for _line in leap_report.render_session_head(
             arm=args.arm, records=len(corpus), cadence=args.cadence,
             cadence_n=_cadence_n, max_absorbed=args.max_absorbed,
@@ -1897,7 +1901,13 @@ def main() -> int:
             # supervisor needs a moment to consume it) — otherwise server.stop()
             # would kill the server before the campaign ever runs.
             if has_pending_request(data_root) or get_campaign_state(data_root) != CampaignState.IDLE:
-                _log("[等待] 语料喂完——等待最后一个战役完成…")
+                # Say WHY feeding stopped: hitting the session's campaign quota is not
+                # "the corpus is exhausted", and records are still unconsumed.
+                if _budget_reached:
+                    _log(f"[等待] 达到战役上限 {args.max_absorbed} 停止喂料"
+                         f"——等待最后一个战役完成…")
+                else:
+                    _log("[等待] 语料喂完——等待最后一个战役完成…")
                 try:
                     wait_for_campaign_completion(data_root, server, timeout=args.campaign_timeout)
                 except Exception as exc:  # noqa: BLE001
