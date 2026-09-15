@@ -172,3 +172,42 @@ def test_isolated_server_log_failure_falls_back_to_devnull(tmp_path, monkeypatch
 
     assert server._open_server_log("server.stderr.log") is subprocess.DEVNULL
     server._close_server_logs()
+
+
+def test_bounce_busy_message_is_reported_once_per_streak(tmp_path, monkeypatch, capsys):
+    """The bounce is polled every 10s (per record, and every tick inside a wait), so the
+    same "server busy" line repeated six times a minute and buried the run's own output
+    on the terminal. It is a raw print (never in the log file), so only the live view
+    suffered — but it must still say once that the bounce is waiting."""
+    import json
+
+    from devtools.benchmarks.common.server_runner import IsolatedServer
+
+    session = tmp_path / "session"
+    clone = session / "clone"
+    clone.mkdir(parents=True)
+    data = tmp_path / "data"
+    (data / "state").mkdir(parents=True)
+    (data / "state" / "evolution_campaign.json").write_text(
+        json.dumps({"active_transaction": {"cycle_outcome": "waiting_for_restart"}}),
+        encoding="utf-8",
+    )
+    server = IsolatedServer(
+        clone=clone, data_root=data, settings_path=data / "settings.json")
+
+    busy = {"pending_count": 1, "running_count": 1}
+    idle = {"pending_count": 0, "running_count": 0}
+    monkeypatch.setattr(server, "_state", lambda timeout=5: busy)
+
+    assert server.maybe_bounce_for_restart() is False
+    assert server.maybe_bounce_for_restart() is False
+    assert capsys.readouterr().out.count("server busy") == 1
+
+    # A real bounce resets the latch, so the next busy streak is reported again.
+    monkeypatch.setattr(server, "_state", lambda timeout=5: idle)
+    monkeypatch.setattr(server, "stop", lambda: None)
+    monkeypatch.setattr(server, "start", lambda **kw: server)
+    assert server.maybe_bounce_for_restart() is True
+    monkeypatch.setattr(server, "_state", lambda timeout=5: busy)
+    assert server.maybe_bounce_for_restart() is False
+    assert capsys.readouterr().out.count("server busy") == 1

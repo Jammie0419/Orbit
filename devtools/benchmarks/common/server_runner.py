@@ -265,6 +265,8 @@ class IsolatedServer:
         # cannot be diagnosed after the fact. Keep both streams on disk, beside the
         # SESSION rather than inside the drive root a benchmark task can read.
         self._server_log_fhs: list = []
+        # Busy-streak latch for the bounce message (see maybe_bounce_for_restart).
+        self._busy_reported = False
         self._last_restart_signal: str = ""
         # Filled by _wait_ready: the HTTP runtime_version + the clone's HEAD/VERSION that
         # produced it, so a driver can record WHICH agent identity its numbers came from.
@@ -497,8 +499,17 @@ class IsolatedServer:
         if not idle:
             # Server still busy processing restart — skip without updating idempotency
             # so the NEXT record's bounce call can retry.
-            print(f"[isolated-server] restart signal: server busy, will retry next record", flush=True)
+            #
+            # Reported ONCE per busy streak. The caller polls every 10s (per record, and
+            # every tick inside a wait), so the same line repeated six times per minute
+            # and buried the run's own output on the terminal. These are raw prints, so
+            # the log FILE was never polluted — only the live view.
+            if not self._busy_reported:
+                self._busy_reported = True
+                print("[isolated-server] restart signal: server busy — will retry "
+                      "(silenced until it changes)", flush=True)
             return False
+        self._busy_reported = False
         # Server is idle — safe to bounce. Enforce idempotency NOW.
         signal_key = f"{marker.stat().st_mtime_ns if marker.exists() else 0}:{camp_updated}"
         if self._last_restart_signal == signal_key:
