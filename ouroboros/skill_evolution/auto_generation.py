@@ -197,26 +197,35 @@ def write_skill_package(
     *,
     task_id: str = "",
     created_by_tool: str = "skill_auto_generation",
+    skill_dir: Optional[pathlib.Path] = None,
 ) -> pathlib.Path:
-    """Write a validated skill dict under ``skills/self/<name>/`` + markers.
+    """Write a validated skill dict + markers; returns the skill directory.
+
+    New skills land under ``skills/self/<name>/``. Pass ``skill_dir`` to write
+    IN PLACE instead — required by evolution: a self-authored skill may live in
+    another bucket (``skills/external/…``, created via data_write), and writing
+    its variant to the hardcoded self bucket produced a SECOND package with the
+    same name. Discovery then flagged both as an identity collision and the
+    original's provenance marker no longer matched its own package.
 
     Markers are written LAST so the initial content hash covers the payload.
-    Returns the skill directory. Callers validate before calling.
+    Callers validate before calling.
     """
     name = canonical_skill_name(skill.get("name") or "")
-    skill_dir = pathlib.Path(drive_root) / "skills" / SELF_BUCKET / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    _write_text_atomic(skill_dir / "SKILL.md", render_skill_manifest(skill))
+    target = (pathlib.Path(skill_dir) if skill_dir
+              else pathlib.Path(drive_root) / "skills" / SELF_BUCKET / name)
+    target.mkdir(parents=True, exist_ok=True)
+    _write_text_atomic(target / "SKILL.md", render_skill_manifest(skill))
     for script in skill.get("scripts") or []:
-        script_path = skill_dir / "scripts" / str(script["name"])
+        script_path = target / "scripts" / str(script["name"])
         _write_text_atomic(script_path, str(script.get("code") or ""))
     write_self_authored_markers(
-        skill_dir,
+        target,
         pathlib.Path(drive_root),
         task_id=task_id,
         created_by_tool=created_by_tool,
     )
-    return skill_dir
+    return target
 
 
 def validate_generated_skill(skill: Any) -> Optional[str]:

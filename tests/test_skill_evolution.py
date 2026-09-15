@@ -467,6 +467,92 @@ def test_evolver_accept_path(monkeypatch, tmp_path):
     assert is_self_authored_skill_dir(drive / "skills" / "self" / "demo-fix", drive_root=drive) is True
 
 
+def _accept_path_with_variant(tmp_path, monkeypatch, variant, accepted_name="demo-fix"):
+    """Run the accept path with `variant` as the winning mutation."""
+    drive = _drive(tmp_path)
+    _seed_skill(drive, "demo-fix")
+    _write_stats(drive, {"demo-fix": {
+        "execution_count": 12, "success_count": 7, "success_rate": 0.5833, "evolution_version": 1}})
+    for i in range(4):
+        _write_tool_row(drive, "tE", "skill_exec", True, args={"skill": "demo-fix"})
+    _fake_llm(monkeypatch, [
+        {"suggestions": ["add retry logic"]},   # failure analysis
+        variant,                                 # suggestion-driven mutation
+        "not json", "not json", "not json",      # strategy mutations fail
+        {"fitness": 0.85},                       # single variant fitness
+    ])
+    skills = _discovered(drive)
+    stats = st.SkillStatsLedger(drive).load()
+    records = ge.SkillEvolver(drive, llm_client=object()).evolve_candidates(skills, stats)
+    return drive, records
+
+
+def test_evolver_renamed_variant_evolves_in_place(monkeypatch, tmp_path):
+    """A rename from the mutation LLM must not mint a second skill.
+
+    The variant's name is normalized to the original's before BOTH validation and
+    writing; the ledger bump targets the original name. Previously the name was
+    forced only on an internal copy, so a renamed variant was written as a NEW
+    skill while the old one was bumped — lineage and routing desynced.
+    """
+    drive, records = _accept_path_with_variant(tmp_path, monkeypatch, {
+        "name": "demo-fix-v2",              # the LLM renamed it
+        "description": "with retries", "type": "script", "runtime": "python",
+        "scripts": [{"name": "main.py", "code": "print('retry ok')\n"}],
+        "tags": ["seed"],
+    })
+    assert records and records[0]["accepted"] is True
+    # Evolved in place under the ORIGINAL name...
+    text = (drive / "skills" / "self" / "demo-fix" / "SKILL.md").read_text(encoding="utf-8")
+    assert parse_skill_manifest_text(text).name == "demo-fix"
+    assert parse_skill_manifest_text(text).version == "1.1"
+    assert "retry" in (drive / "skills" / "self" / "demo-fix" / "scripts" / "main.py").read_text(encoding="utf-8")
+    # ...and no package was created under the LLM's new name.
+    assert not (drive / "skills" / "self" / "demo-fix-v2").exists()
+    assert st.SkillStatsLedger(drive).get("demo-fix")["evolution_version"] == 2
+
+
+def test_evolver_writes_in_place_for_non_self_bucket(monkeypatch, tmp_path):
+    """A self-authored skill outside skills/self must evolve in ITS OWN package.
+
+    write_skill_package hardcoded skills/self/<name>, so evolving an
+    external-bucket skill minted a second package with the same name; discovery
+    then flagged both as an identity collision.
+    """
+    drive = _drive(tmp_path)
+    external_dir = drive / "skills" / "external" / "demo-fix"
+    from ouroboros.skill_evolution.auto_generation import write_skill_package as wsp
+    from ouroboros.skill_loader import write_self_authored_markers
+    external_dir.mkdir(parents=True, exist_ok=True)
+    wsp(drive, {
+        "name": "demo-fix", "description": "seed", "version": "1.0",
+        "type": "script", "runtime": "python", "when_to_use": "when seeding",
+        "scripts": [{"name": "main.py", "code": "print('hi')\n"}], "tags": ["seed"],
+    }, task_id="seed-task", created_by_tool="test", skill_dir=external_dir)
+    write_self_authored_markers(external_dir, drive, task_id="seed-task", created_by_tool="test")
+
+    _write_stats(drive, {"demo-fix": {
+        "execution_count": 12, "success_count": 7, "success_rate": 0.5833, "evolution_version": 1}})
+    for i in range(4):
+        _write_tool_row(drive, "tE", "skill_exec", True, args={"skill": "demo-fix"})
+    _fake_llm(monkeypatch, [
+        {"suggestions": ["add retry logic"]},
+        {"name": "demo-fix", "description": "with retries", "type": "script",
+         "runtime": "python",
+         "scripts": [{"name": "main.py", "code": "print('retry ok')\n"}], "tags": ["seed"]},
+        "not json", "not json", "not json",
+        {"fitness": 0.85},
+    ])
+    records = ge.SkillEvolver(drive, llm_client=object()).evolve_candidates(
+        _discovered(drive), st.SkillStatsLedger(drive).load())
+    assert records and records[0]["accepted"] is True
+    # Updated IN PLACE...
+    assert "retry" in (external_dir / "scripts" / "main.py").read_text(encoding="utf-8")
+    # ...and no duplicate package under skills/self.
+    assert not (drive / "skills" / "self" / "demo-fix").exists()
+    assert len(_discovered(drive)) == 1
+
+
 def test_evolver_reject_path(monkeypatch, tmp_path):
     drive = _drive(tmp_path)
     original_code = "print('original')\n"

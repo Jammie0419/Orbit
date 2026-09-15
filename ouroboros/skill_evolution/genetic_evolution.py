@@ -265,6 +265,13 @@ class SkillEvolver:
                 fitness_discount=discount,
             )
         best = variants[best_idx]
+        # An evolution must stay IN PLACE. The mutation LLM may return a new name
+        # (the prompt permits it), but the ledger bump below targets the ORIGINAL
+        # name and the write must land in the original's package. Normalize the
+        # name on the dict that is BOTH validated and written — forcing it on an
+        # internal copy (as _validate_variant does) let a renamed variant be
+        # written as a NEW skill while the version was bumped on the old one.
+        best["name"] = str(original.get("name") or "")
         reason = self._validate_variant(original, best)
         if reason is not None:
             return self._record(
@@ -279,9 +286,15 @@ class SkillEvolver:
         # 兜底: keep the pre-overwrite package under the skill system's orphan
         # backup convention (".replaced-"), so a failed re-review can roll back.
         backup_dir = self._backup_skill(skill)
+        # Evolve IN PLACE: the skill may live outside skills/self (e.g. an
+        # external self-authored package created via data_write), and writing the
+        # variant to the hardcoded self bucket would mint a second package with
+        # the same name — discovery then flags both as an identity collision.
+        original_dir = pathlib.Path(getattr(skill, "skill_dir", "") or "")
         write_skill_package(
             self.drive_root, best, task_id="",
             created_by_tool="skill_evolution",
+            skill_dir=original_dir if original_dir.is_dir() else None,
         )
         new_version = _bump_ledger_version(self.drive_root, str(skill.name))
         return self._record(
