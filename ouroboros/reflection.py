@@ -754,6 +754,22 @@ def _update_patterns(drive_root: pathlib.Path, entry: Dict[str, Any]) -> None:
         "old_content": current,
         "new_content": updated + "\n",
     })
+    # Compare-and-swap: the register was read before the LLM call, and the model
+    # returns a FULL replacement table. A reflection running in parallel (the task
+    # loop and an evolution cycle can now overlap) would have its rows silently
+    # dropped by this write. The history row above keeps this update auditable, so
+    # defer to the next reflection instead of clobbering a register that moved.
+    try:
+        latest = patterns_path.read_text(encoding="utf-8") if patterns_path.exists() else _PATTERNS_HEADER
+    except Exception:
+        latest = current
+    if latest != current:
+        log.warning(
+            "Pattern register changed while the update was in flight for task %s; "
+            "deferring this update (recoverable from patterns_history.jsonl)",
+            str(entry.get("task_id") or ""),
+        )
+        return
     patterns_path.write_text(updated + "\n", encoding="utf-8")
     log.info("Pattern register updated (%d chars)", len(updated))
 

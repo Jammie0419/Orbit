@@ -798,10 +798,14 @@ def verify_restart(env: Any, git_sha: str) -> None:
                         return campaign
                     return None
                 if commit_sha != snapshot_sha:
-                    if gen:
-                        campaign["last_boot_reconcile_gen"] = gen
-                        campaign["updated_at"] = utc_now_iso()
-                        return campaign
+                    # The campaign moved between the snapshot read and the lock. The
+                    # reachability verdict below was probed for ``snapshot_sha``, so it
+                    # must not be applied to a different commit — abort without writing.
+                    # Deliberately do NOT stamp ``last_boot_reconcile_gen``: stamping
+                    # would burn this generation's reconcile although nothing was
+                    # reconciled, stranding the transaction until the next genuine
+                    # restart. Leaving the stamp alone lets a later boot (including a
+                    # worker respawn) retry against a fresh snapshot.
                     return None
                 now = utc_now_iso()
                 if snapshot_reachable is None:

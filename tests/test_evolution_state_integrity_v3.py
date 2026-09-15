@@ -1858,6 +1858,61 @@ def test_boot_restart_verifies_exact_v2_claim_only_after_new_generation(
     assert not marker.exists()
 
 
+def test_boot_reconcile_snapshot_drift_neither_absorbs_nor_burns_the_generation(
+    tmp_path, monkeypatch,
+):
+    """When the campaign moves between the snapshot read and the locked re-read,
+    the reachability verdict was probed for the OLD commit and must not be applied.
+    The bail-out must also leave ``last_boot_reconcile_gen`` alone: stamping it
+    would burn the generation's one reconcile while nothing was reconciled,
+    stranding the open transaction until the next genuine restart."""
+    from ouroboros import agent_startup_checks, process_custody
+    from supervisor import evolution_lifecycle
+
+    generation = {"value": "server-a"}
+    monkeypatch.setattr(
+        process_custody, "current_custody_session_id", lambda: generation["value"],
+    )
+    campaign, tx = _active_transaction(tmp_path)
+    sha = "8" * 40
+    claim = {
+        "campaign_id": campaign["id"],
+        "transaction_id": tx["transaction_id"],
+        "task_id": tx["task_id"],
+        "commit_sha": sha,
+    }
+    assert evolution_lifecycle.record_evolution_commit(**claim)["ok"] is True
+    env = SimpleNamespace(
+        drive_path=lambda name: tmp_path / name,
+        drive_root=tmp_path,
+        repo_dir=tmp_path,
+    )
+    # No pending marker: the transaction is dangling, so boot reconciliation is
+    # the only path that can settle it.
+    campaign_path = tmp_path / "state" / "evolution_campaign.json"
+    real_read = agent_startup_checks.read_json_dict
+
+    def _drifting_read(path, *args, **kwargs):
+        data = real_read(path, *args, **kwargs)
+        if pathlib.Path(path) == campaign_path and isinstance(data, dict):
+            data = json.loads(json.dumps(data))
+            active = data.get("active_transaction")
+            if isinstance(active, dict):
+                # The snapshot observes a different open commit than the lock does.
+                active["commit_sha"] = "f" * 40
+        return data
+
+    monkeypatch.setattr(agent_startup_checks, "read_json_dict", _drifting_read)
+    generation["value"] = "server-b"  # a new generation opens the reconcile gate
+
+    agent_startup_checks.verify_restart(env, sha)
+
+    stored = evolution_lifecycle._read_evolution_campaign()
+    assert int(stored.get("absorbed_cycles_done") or 0) == 0
+    assert stored["active_transaction"]["transaction_id"] == tx["transaction_id"]
+    assert stored.get("last_boot_reconcile_gen") != "server-b"
+
+
 def test_boot_restart_rejects_mismatched_claim_without_loser_bypass(
     tmp_path, monkeypatch,
 ):

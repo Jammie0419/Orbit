@@ -610,3 +610,43 @@ def test_append_reflection_routed_non_project_task_uses_canonical_drive(tmp_path
     rows = [json.loads(line) for line in canonical_log.read_text(encoding="utf-8").splitlines()]
     assert rows[0]["reflection"] == "plain reflection"
     assert not (mirror / "logs" / "task_reflections.jsonl").exists()
+
+
+def test_update_patterns_defers_when_register_changed_mid_flight(tmp_path, monkeypatch):
+    """The register is read before the LLM call and written back as a FULL
+    replacement, so a concurrent append during the call would be silently dropped.
+    The write must defer (the update stays auditable in patterns_history.jsonl)
+    and leave the concurrent row in place."""
+    import ouroboros.llm_observability as obs
+    from ouroboros.reflection import _update_patterns
+
+    patterns_path = tmp_path / "memory" / "knowledge" / "patterns.md"
+    patterns_path.parent.mkdir(parents=True, exist_ok=True)
+    original = "# Pattern Register\n\n| Error class | Count | Root cause | Fix | Status |\n|---|---|---|---|---|\n| old-row | 1 | a | b | open |\n"
+    patterns_path.write_text(original, encoding="utf-8")
+    concurrent_row = "| concurrent-row | 2 | c | d | open |\n"
+
+    def _fake_chat_observed(*args, **kwargs):
+        # Another reflection appends while this call is in flight.
+        with patterns_path.open("a", encoding="utf-8") as fh:
+            fh.write(concurrent_row)
+        return (
+            {"content": "# Pattern Register\n\n| Error class | Count | Root cause | Fix | Status |\n|---|---|---|---|---|\n| llm-row | 3 | e | f | open |\n"},
+            {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.0},
+        )
+
+    monkeypatch.setattr(obs, "chat_observed", _fake_chat_observed)
+
+    _update_patterns(tmp_path, {
+        "task_id": "t-patterns",
+        "goal": "goal",
+        "key_markers": ["REVIEW_BLOCKED"],
+        "reflection": "reflection",
+    })
+
+    live = patterns_path.read_text(encoding="utf-8")
+    assert concurrent_row in live, "the concurrent append must survive"
+    assert "llm-row" not in live, "the stale full-replacement must not clobber it"
+
+    history = (tmp_path / "memory" / "knowledge" / "patterns_history.jsonl").read_text(encoding="utf-8")
+    assert "llm-row" in history, "the deferred update must stay auditable"
