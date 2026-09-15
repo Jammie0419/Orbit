@@ -302,3 +302,20 @@ def test_experience_line_is_not_placed_before_it_exists():
     tail = "\n".join(leap_report.render_record_tail(view))
     assert "经验" not in progress
     assert "经验（账本累计 11）" in tail
+
+
+def test_tail_follows_algorithm_order_attribution_then_its_memory_write():
+    """Algorithm 1: `3: E ← Attribute(τ, H)` then `4: M ← MemWrite(M, E)`. The
+    experience booking IS the MemWrite of the attribution evidence (store_experience
+    books the credits it just computed), so ③归因 must lead and ④记忆 follow."""
+    lines = leap_report.render_record_tail(_full_view())
+    order = []
+    for i, line in enumerate(lines):
+        for label in ("③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传", "⑪沉淀"):
+            if label in line and label not in order:
+                order.append(label)
+    assert order == ["③归因", "④记忆", "⑤触发", "⑥规划", "⑨遗传", "⑪沉淀"], order
+    # 具体到那两行
+    attr = next(i for i, l in enumerate(lines) if "信用 +" in l)
+    booked = next(i for i, l in enumerate(lines) if "经验（账本累计" in l)
+    assert attr < booked

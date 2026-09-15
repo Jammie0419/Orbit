@@ -323,13 +323,18 @@ def render_record_progress(view: RecordView) -> List[str]:
 
 
 def render_record_tail(view: RecordView) -> List[str]:
-    """The post-decision operators: ③归因 ④记忆 ⑨遗传 ⑤触发 ⑥规划 ⑪沉淀.
+    """The post-decision operators, in Algorithm-1 order:
+    ③归因 ④记忆 ⑤触发 ⑥规划 ⑨遗传 ⑪沉淀.
 
-    The attribution credits, the experience bookings and the promotion verdict are all
-    produced by the promotion decision, so they can only be emitted after it returns.
+    Attribution (E) and its memory write (MemWrite(M, E) — the experience/credit
+    booking) and the promotion verdict are all produced inside the promotion pass, so
+    this half can only be emitted once it returns.
     """
     lines: List[str] = []
-    for render in (_render_experience, _render_attribute, _render_worthwhile, _render_plan,
+    # Algorithm-1 order: E ← Attribute(τ, H) then M ← MemWrite(M, E). The experience
+    # booking IS that write (store_experience books the credits it just computed in the
+    # same call), so it must follow the attribution lines it records — not precede them.
+    for render in (_render_attribute, _render_experience, _render_worthwhile, _render_plan,
                    _render_behavioural_heredity):
         render(view, lines)
     checkpoints = _seq(view.checkpoint_lines)
