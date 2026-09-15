@@ -122,6 +122,9 @@ class RecordView:
     total: int
     record_id: str
     level: str = "?"
+    # 与本次记录并行的战役（如 "战役#1 吸收中"）：max≥2 时下一块反思与上一战役的
+    # 吸收并行，标注出来读者才知道这条记录不是在独占运行。
+    parallel: str = ""
     # ②执行
     goal: str = ""
     seeded: int = 0
@@ -295,7 +298,10 @@ def render_record_header(view: RecordView) -> str:
     that stays silent from the provider probe until the block completes reads as a
     stuck run (the flat log printed its header before that call).
     """
-    return block_header(f"记录 {view.index:2d}/{view.total} · {view.record_id} (L{view.level})")
+    title = f"记录 {view.index:2d}/{view.total} · {view.record_id} (L{view.level})"
+    if view.parallel:
+        title += f" · 并行 {view.parallel}"
+    return block_header(title)
 
 
 def render_record_start(view: RecordView) -> List[str]:

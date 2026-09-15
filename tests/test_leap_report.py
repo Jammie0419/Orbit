@@ -388,3 +388,28 @@ def test_harness_emits_a_record_in_phases_not_as_one_block():
     assert "render_record_block(" not in source, (
         "main() must not emit the whole record in one call"
     )
+
+
+def test_record_header_marks_a_concurrent_campaign():
+    """With max>=2 the next block's reflection overlaps the previous campaign's
+    ABSORPTION: the header has to say so, or the campaign's ⑨遗传 outcome line —
+    which surfaces at the next poll, i.e. inside this record's block — reads as if it
+    belonged to this record."""
+    view = _full_view(parallel="战役#1 吸收中")
+    header = leap_report.render_record_header(view)
+    assert "记录  5/11" in header and "并行 战役#1 吸收中" in header
+
+    solo = leap_report.render_record_header(_full_view(parallel=""))
+    assert "并行" not in solo, "a record running alone must not claim a concurrent campaign"
+
+
+def test_wait_lines_are_operational_not_operators():
+    """Every wait path funnels through the same marker, so the chips keep one meaning."""
+    import inspect
+
+    from devtools.benchmarks.evolution import run_evolution_arm as arm
+
+    source = inspect.getsource(arm)
+    assert "[等待] " not in source.replace('"""', ""), (
+        "flat [等待] lines were replaced by render_ops(..., kind='等待')"
+    )

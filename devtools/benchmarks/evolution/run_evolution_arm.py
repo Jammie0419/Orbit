@@ -284,6 +284,11 @@ def _augment_request_contract(data_root: pathlib.Path) -> None:
 _LOG_FH = None
 
 
+def _wait(msg: str) -> None:
+    """A wait/heartbeat line: the RUN is waiting, no LEAP operator is executing."""
+    _log(leap_report.render_ops(msg, kind="等待"))
+
+
 def _log(msg: str) -> None:
     line = f"[run_evolution_arm] {msg}"
     print(line, flush=True)
@@ -396,10 +401,10 @@ def wait_for_campaign_start(data_root: pathlib.Path, timeout: float = 180) -> bo
     start = time.time()
     while time.time() - start < timeout:
         if get_campaign_state(data_root) != CampaignState.IDLE:
-            _log("[等待] 战役已启动")
+            _wait("战役已启动")
             return True
         time.sleep(3)
-    _log(f"[等待] ⚠️ 战役未在 {timeout:.0f}s 内启动（请求可能被监督者拒绝）")
+    _wait(f"⚠️ 战役未在 {timeout:.0f}s 内启动（请求可能被监督者拒绝）")
     return False
 
 
@@ -433,19 +438,20 @@ def wait_for_campaign_execution(data_root: pathlib.Path, server: IsolatedServer,
         except Exception:  # noqa: BLE001 - display only
             pass
         if get_campaign_state(data_root) != CampaignState.RUNNING:
-            _log("[等待] 战役执行完成（commit 已落定）——下一轮反思与吸收并行进行")
+            _log(leap_report.render_ops(
+                "战役执行完成（commit 已落定）——下一轮反思与吸收并行进行", kind="等待"))
             return
         if not has_pending_request(data_root):
             stale_ticks = stale_ticks + 1 if server.is_queue_idle() else 0
             if stale_ticks >= _WAIT_STALE_TICKS:
-                _log("[等待] ⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
+                _wait("⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
                 return
         else:
             stale_ticks = 0
         elapsed = time.time() - start
         if elapsed >= timeout and not warned:
             warned = True
-            _log(f"[等待] ⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在执行——继续等待"
+            _wait(f"⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在执行——继续等待"
                  f"（硬上限 {hard_cap:.0f}s）")
         tick += 1
         # Heartbeat: only when something moved, plus a liveness line every 5 minutes.
@@ -459,7 +465,7 @@ def wait_for_campaign_execution(data_root: pathlib.Path, server: IsolatedServer,
             except Exception:  # noqa: BLE001 - display only
                 pass
         time.sleep(_WAIT_POLL_SECS)
-    _log(f"[等待] ⚠️ 硬超时 {hard_cap:.0f}s，战役仍在执行——继续喂料"
+    _wait(f"⚠️ 硬超时 {hard_cap:.0f}s，战役仍在执行——继续喂料"
          f"（吸收会在后续记录或下次 boot 自检中完成）")
 
 
@@ -510,7 +516,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
         if state == CampaignState.RUNNING and not has_pending_request(data_root):
             stale_ticks = stale_ticks + 1 if server.is_queue_idle() else 0
             if stale_ticks >= _WAIT_STALE_TICKS:
-                _log("[等待] ⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
+                _wait("⚠️ 战役任务已消失且队列空闲（未提交）——判定为中断的战役，继续处理")
                 return
         else:
             stale_ticks = 0
@@ -521,7 +527,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
         elapsed = time.time() - start
         if elapsed >= timeout and not warned:
             warned = True
-            _log(f"[等待] ⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在进行——继续等待"
+            _wait(f"⚠️ 已超过 --campaign-timeout {timeout:.0f}s，战役仍在进行——继续等待"
                  f"（硬上限 {hard_cap:.0f}s；战况可用 --campaign-timeout 调大）")
         tick += 1
         if tick % 6 == 0:  # ~60s 心跳（战役可能跑 30-45 分钟）
@@ -533,7 +539,7 @@ def wait_for_campaign_completion(data_root: pathlib.Path, server: IsolatedServer
             except Exception:  # noqa: BLE001 - display only
                 pass
         time.sleep(_WAIT_POLL_SECS)
-    _log(f"[等待] ⚠️ 硬超时 {hard_cap:.0f}s，战役仍未结束——放弃等待并收尾"
+    _wait(f"⚠️ 硬超时 {hard_cap:.0f}s，战役仍未结束——放弃等待并收尾"
          f"（战役会被 server.stop() 中断；已提交的 commit 会在下次 resume 的启动自检中吸收/放弃）")
 
 
@@ -1676,11 +1682,18 @@ def main() -> int:
                     # 与"吸收"（重启 + boot 自检）并行——那段窗口本来是死时间。
                     # 执行期喂料会让反思和进化任务同时抢预算，也污染战役本身的观测。
                     if get_campaign_state(data_root) == CampaignState.RUNNING:
-                        _log("[等待] 在途战役仍在执行——等它提交后再开始下一轮反思")
+                        _log(leap_report.render_ops(
+                            "在途战役仍在执行——等它提交后再开始下一轮反思", kind="等待"))
                         wait_for_campaign_execution(data_root, server, timeout=args.campaign_timeout)
+                    # 此刻若还有战役在途（max≥2：正在吸收），本次记录就是与它并行跑的。
+                    _camp_state = get_campaign_state(data_root)
+                    _parallel = ""
+                    if _camp_state != CampaignState.IDLE:
+                        _parallel = f"战役#{_CAMPAIGN_SNAPSHOT.get('cycle') or '?'} " + (
+                            "吸收中" if _camp_state == CampaignState.ABSORBING else "执行中")
                     _view = leap_report.RecordView(
                         index=i, total=len(corpus), record_id=rec["id"],
-                        level=str(rec.get("level", "?")),
+                        level=str(rec.get("level", "?")), parallel=_parallel,
                     )
                     task_dict = {"id": rec["id"], "text": rec["task"], "drive_root": str(data_root)}
                     llm_trace = load_trace_from_path(rec["trace_ref"], base_dir=args.corpus.parent)
@@ -1777,7 +1790,9 @@ def main() -> int:
                     if _at_boundary:
                         _st = get_campaign_state(data_root)
                         if _st != CampaignState.IDLE or has_pending_request(data_root):
-                            _log(f"[等待] cadence 边界（{_cn} 条已满）——等待上一个战役完成（状态: {_st.value}）")
+                            _log(leap_report.render_ops(
+                                f"cadence 边界（{_cn} 条已满）——等待上一个战役完成（状态: {_st.value}）",
+                                kind="等待"))
                             wait_for_campaign_completion(data_root, server, timeout=args.campaign_timeout)
                     decision = maybe_promote(env, task_dict, reflection_entry, llm_client)
                     _exp_after = _count_lines(data_root / "state" / "evolution_experiences.jsonl")
@@ -1946,10 +1961,10 @@ def main() -> int:
                 # Say WHY feeding stopped: hitting the session's campaign quota is not
                 # "the corpus is exhausted", and records are still unconsumed.
                 if _budget_reached:
-                    _log(f"[等待] 达到战役上限 {args.max_absorbed} 停止喂料"
+                    _wait(f"达到战役上限 {args.max_absorbed} 停止喂料"
                          f"——等待最后一个战役完成…")
                 else:
-                    _log("[等待] 语料喂完——等待最后一个战役完成…")
+                    _wait("语料喂完——等待最后一个战役完成…")
                 try:
                     wait_for_campaign_completion(data_root, server, timeout=args.campaign_timeout)
                 except Exception as exc:  # noqa: BLE001
