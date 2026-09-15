@@ -1260,6 +1260,47 @@ def install_shutdown_signal_handlers(handler) -> None:
         signal.signal(signal.SIGTERM, handler)
 
 
+def reset_shutdown_signal_handlers() -> None:
+    """Restore the DEFAULT disposition for SIGINT/SIGTERM (POSIX).
+
+    Needed by forked children: a ``fork`` child inherits the parent's handlers, so a
+    worker that inherited the server's graceful-stop handler would IGNORE the
+    SIGTERM meant to reap it — turning one clean shutdown into another generation
+    of orphans."""
+    if IS_WINDOWS:
+        return
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def set_parent_death_signal(signum: Optional[int] = None) -> bool:
+    """Ask the OS to signal THIS process when its parent dies (Linux PR_SET_PDEATHSIG).
+
+    Returns True when the request was accepted. Best-effort and platform-gated:
+    only Linux exposes this, and a failure (no ctypes, no prctl, restricted
+    seccomp) must leave the caller running normally — it can only ever improve
+    teardown, never break startup.
+
+    Why it exists: a child started with ``subprocess_new_group_kwargs()`` lives in
+    its own session, so nothing that kills its parent (SIGKILL, OOM kill, a dropped
+    SSH connection) reaches it. It then keeps running against the same drive root
+    while the next session opens the same clone — two supervisors, one state
+    directory.
+    """
+    if not IS_LINUX:
+        return False
+    sig = int(signum if signum is not None else signal.SIGTERM)
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        return libc.prctl(PR_SET_PDEATHSIG, sig, 0, 0, 0) == 0
+    except Exception:
+        log.debug("Could not set parent-death signal", exc_info=True)
+        return False
+
+
 def subprocess_hidden_kwargs() -> dict:
     """Return kwargs to suppress Windows console windows."""
     if IS_WINDOWS:

@@ -50,3 +50,60 @@ def test_kill_process_tree_sweeps_escaped_descendants(monkeypatch):
     assert escaped[0] in killed and escaped[1] in killed
     assert 4242 in killed
     assert all(sig == _signal.SIGKILL for _, sig in kill_calls)
+
+
+# ---------------------------------------------------------------------------
+# Teardown is not enough: the tree must die with its launcher
+# ---------------------------------------------------------------------------
+
+def test_set_parent_death_signal_arms_prctl_on_linux():
+    """The isolated server runs in its OWN session, so nothing that kills the
+    harness (SIGKILL, OOM, dropped SSH) reaches it — it kept running against the
+    same clone/data after smoke_boundry_1's harness died."""
+    import ouroboros.platform_layer as pl
+
+    if not pl.IS_LINUX:
+        pytest.skip("PR_SET_PDEATHSIG is Linux-only")
+    assert pl.set_parent_death_signal() is True
+
+
+def test_set_parent_death_signal_is_a_noop_off_linux(monkeypatch):
+    import ouroboros.platform_layer as pl
+
+    monkeypatch.setattr(pl, "IS_LINUX", False)
+    assert pl.set_parent_death_signal() is False
+
+
+def test_reset_shutdown_signal_handlers_restores_default(monkeypatch):
+    """A forked worker inherits the server's graceful-stop handler; without the
+    reset it would ignore the SIGTERM that is supposed to reap it."""
+    import signal as _signal
+
+    import ouroboros.platform_layer as pl
+
+    if pl.IS_WINDOWS:
+        pytest.skip("POSIX signal dispositions")
+
+    saved = {sig: _signal.getsignal(sig) for sig in (_signal.SIGINT, _signal.SIGTERM)}
+    try:
+        pl.install_shutdown_signal_handlers(lambda *_a: None)
+        assert _signal.getsignal(_signal.SIGTERM) not in (_signal.SIG_DFL, _signal.SIG_IGN)
+        pl.reset_shutdown_signal_handlers()
+        assert _signal.getsignal(_signal.SIGTERM) is _signal.SIG_DFL
+        assert _signal.getsignal(_signal.SIGINT) is _signal.SIG_DFL
+    finally:
+        for sig, handler in saved.items():
+            _signal.signal(sig, handler)
+
+
+def test_isolated_server_env_arms_the_parent_death_signal(tmp_path):
+    """The bench must opt in: a launcher-managed production server is meant to
+    outlive short-lived parents, a throwaway benchmark server is not."""
+    from devtools.benchmarks.common.server_runner import IsolatedServer
+
+    server = IsolatedServer(
+        clone=tmp_path / "clone",
+        data_root=tmp_path / "data",
+        settings_path=tmp_path / "data" / "settings.json",
+    )
+    assert server._env()["OUROBOROS_DIE_WITH_PARENT"] == "1"

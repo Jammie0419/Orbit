@@ -1329,6 +1329,16 @@ def _prepare_worker_task_runtime() -> None:
 def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str,
                 custody_session_id: str = "") -> None:
     import os as _os
+    # A 'fork' child inherits the server's graceful-stop SIGTERM/SIGINT handler, so
+    # this worker would IGNORE the very signal meant to reap it — one clean shutdown
+    # would produce another generation of orphaned workers. Restore the default
+    # disposition before anything else can depend on it.
+    try:
+        from ouroboros.platform_layer import reset_shutdown_signal_handlers
+
+        reset_shutdown_signal_handlers()
+    except Exception:
+        pass
     # Mark this process as a worker BEFORE importing the agent/LLM stack so the
     # central network-transport policy disables system proxy resolution
     # (trust_env=False) for every HTTP client created here. This is the

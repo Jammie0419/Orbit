@@ -92,6 +92,10 @@ _restart_requested = threading.Event()
 # control endpoints that restart on the owner's behalf). The single fact the
 # re-exec needs to decide whether the runtime-mode ratchet pin rides along.
 _owner_restart_requested = threading.Event()
+# Set by the SIGTERM/SIGINT handler: an EXTERNAL stop (operator, parent death,
+# container stop) as opposed to the internal restart request. Both take the same
+# graceful path out of uvicorn, but only this one must NOT re-exec.
+_shutdown_requested = threading.Event()
 _LAUNCHER_MANAGED = str(os.environ.get("OUROBOROS_MANAGED_BY_LAUNCHER", "") or "").strip() == "1"
 
 # Captured in main() for Settings LAN-reachability metadata.
@@ -2903,6 +2907,22 @@ def _emergency_process_cleanup(*, port_sweep: bool = True) -> None:
         pass
 
 def main() -> int:
+    from ouroboros import platform_layer
+
+    # External stops (SIGTERM/SIGINT) go through the same graceful path as an
+    # internal restart — see the _shutdown_requested branch below. The handler only
+    # sets the flag; teardown stays on this thread.
+    platform_layer.install_shutdown_signal_handlers(
+        lambda _signum, _frame: _shutdown_requested.set()
+    )
+    # Benchmark/embedded launches start this process in its OWN session, so nothing
+    # that kills the launcher (SIGKILL, OOM, dropped SSH) reaches it. When asked,
+    # tie this process's life to its parent and let the signal path above reap the
+    # workers. Opt-in: a launcher-managed production server is meant to outlive
+    # short-lived parents.
+    if str(os.environ.get("OUROBOROS_DIE_WITH_PARENT", "") or "").strip() == "1":
+        if platform_layer.set_parent_death_signal():
+            log.info("Parent-death signal armed (SIGTERM on launcher exit).")
     try:
         saved_host = str(load_settings().get("OUROBOROS_SERVER_HOST") or "").strip()
     except Exception:
@@ -2938,10 +2958,15 @@ def main() -> int:
     _uvicorn_exited = threading.Event()
 
     def _check_restart():
-        """Monitor restart signal, then shut down uvicorn."""
-        while not _restart_requested.is_set():
+        """Monitor restart OR external-shutdown signal, then shut down uvicorn."""
+        while not (_restart_requested.is_set() or _shutdown_requested.is_set()):
             time.sleep(0.5)
-        log.info("Restart requested — closing WebSocket clients and shutting down server.")
+        if _restart_requested.is_set():
+            log.info("Restart requested — closing WebSocket clients and shutting down server.")
+        else:
+            log.info(
+                "Shutdown signal received — closing WebSocket clients and shutting down server."
+            )
 
         loop = _event_loop
         if loop:
@@ -2978,6 +3003,15 @@ def main() -> int:
         if not _LAUNCHER_MANAGED:
             _restart_current_process(args.host, actual_port)
         os._exit(RESTART_EXIT_CODE)
+
+    if _shutdown_requested.is_set():
+        # An external stop must reap the worker tree on the way out. Without this
+        # branch the default SIGTERM/SIGINT disposition killed this process where it
+        # stood, leaving every worker alive in its OWN session — unreachable by a
+        # process-group kill and still writing to the drive root.
+        log.info("Exiting after external shutdown signal.")
+        _emergency_process_cleanup(port_sweep=False)
+        return 0
 
     return 0
 

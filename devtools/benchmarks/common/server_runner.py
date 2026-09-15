@@ -286,6 +286,11 @@ class IsolatedServer:
             "OUROBOROS_SERVER_HOST": self.host,
             "OUROBOROS_SERVER_PORT": str(self.port),
             "OUROBOROS_HOST_SERVICE_PORT": str(self.host_service_port),
+            # The server runs in its OWN session (subprocess_new_group_kwargs), so a
+            # harness killed by anything but its own stop() — SIGKILL, an OOM kill, a
+            # dropped SSH connection — used to leave a fully alive server tree behind,
+            # still writing to this session's clone/data. Tie it to the harness.
+            "OUROBOROS_DIE_WITH_PARENT": "1",
         })
         return env
 
