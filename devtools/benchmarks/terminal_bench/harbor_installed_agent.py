@@ -1519,49 +1519,35 @@ PY
         return int(effective) if effective > 0 else 1
 
     def _append_capability_guidance(self, instruction: str) -> str:
-        """Append task-specific annotations to the instruction.
+        """Append the per-task annotation block to the instruction.
 
-        ONLY the task annotations are appended here (from
-        exp/capabilities/task_annotations.py) — the global OUROBOROS_CAP_RULES block
-        is deliberately NOT rendered into the instruction: a 100+ KB system prompt
-        (global rules + per-task notes) makes mimo-v2.5 emit a single maxed-out
-        65536-token reply (8+ min, length-truncated, then deadline exceeded). The
-        annotations are the ONLY channel that tells the agent what past runs of this
-        task died on. They render to "" when nothing is known, so default behavior is
-        unchanged; any import or task-name resolution failure degrades to the plain
-        instruction.
+        Task annotations are the ONLY prompt-side capability this adapter injects.
+        The global OUROBOROS_CAP_RULES block that once accompanied them is gone from
+        this path on purpose: a 100+ KB system prompt (global rules + per-task notes)
+        made mimo-v2.5 emit a single maxed-out 65536-token reply, which was
+        length-truncated ~8 minutes in and then blew the deadline. The annotations
+        are the only channel that tells the agent what past runs of THIS task died on.
 
-        OFF by default (OUROBOROS_TB_TASK_ANNOTATIONS=1 to enable). The annotations
-        are distilled from this benchmark's own observed failures, so a run with them
-        on measures the model against the task PLUS prior-run knowledge; it must not
-        be reported as a clean measurement, and it must not be silently mixed into a
-        baseline arm. Gating it behind an env var makes the arm choice explicit and
-        keeps the capability snapshot honest.
+        The enable flag and the task-name normalisation both live in
+        exp/capabilities/task_annotations.py, so this method cannot drift from the
+        module about what "enabled" means or which name shapes are accepted. Default
+        OFF: the bodies are distilled from this benchmark's own failures, so an
+        annotated run is not a clean measurement and must not be silently mixed into
+        a baseline arm. Every failure here degrades to the plain instruction.
         """
-        if str(os.environ.get("OUROBOROS_TB_TASK_ANNOTATIONS") or "").strip().lower() not in ("1", "true", "yes", "on"):
-            return instruction
-        task_name = ""
         try:
-            parent = Path(self.logs_dir).resolve().parent.name  # "<task>__<trialhash>"
-            if "__" in parent:
-                task_name = parent.rsplit("__", 1)[0].strip()
-        except Exception:
-            task_name = ""
-        parts = []
-        if task_name:
-            try:
-                from devtools.benchmarks.terminal_bench.exp.capabilities.task_annotations import (
-                    render_task_annotations,
-                )
-
-                rendered = render_task_annotations(task_name)
-                if rendered:
-                    parts.append(rendered)
-            except Exception as exc:  # best-effort only
-                log.warning("task annotations guidance skipped for %r: %s", task_name, exc)
-        if not parts:
+            from devtools.benchmarks.terminal_bench.exp.capabilities import task_annotations as _ann
+        except Exception as exc:  # best-effort only
+            log.warning("task annotations unavailable: %s", exc)
             return instruction
-        return instruction + "\n\n" + "\n\n".join(parts)
+        if not _ann.annotations_enabled():
+            return instruction
+        try:
+            trial_dir_name = Path(self.logs_dir).resolve().parent.name  # "<task>__<trialhash>"
+        except Exception:
+            trial_dir_name = ""
+        rendered = _ann.render_task_annotations(trial_dir_name)
+        return f"{instruction}\n\n{rendered}" if rendered else instruction
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         self.logs_dir.mkdir(parents=True, exist_ok=True)

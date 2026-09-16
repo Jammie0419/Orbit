@@ -14,6 +14,13 @@ are reported, and it must not be mixed into an arm that is described as clean.
 
 from __future__ import annotations
 
+import os
+
+# The one flag that turns this arm on. Owned here (not in the adapter) so the
+# adapter and any future caller cannot disagree about whether it is enabled.
+ENV_FLAG = "OUROBOROS_TB_TASK_ANNOTATIONS"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
 TASK_ANNOTATIONS: dict[str, str] = {
     'cancel-async-tasks': r"""1. 关键测试场景：当 n_tasks > max_concurrent 时发送 SIGINT，必须确保所有已启动的任务（包括正在等待信号量的）都执行清理代码。
 2. 实现要点：语义必须是「信号量等待 + 任务执行 + 清理」在同一作用域内——参考解法用 async with semaphore 包住任务体即可，手动 try/finally + acquire/release 也可以，但不要在 except CancelledError 里对子任务再次 cancel()。
@@ -214,17 +221,56 @@ int main(int argc, char** argv) {
 }
 
 
-def render_task_annotations(task_name: str) -> str:
-    """Render the annotation block for `task_name`, or "" when nothing is known.
+def annotations_enabled() -> bool:
+    """True when OUROBOROS_TB_TASK_ANNOTATIONS is truthy. Default OFF.
 
-    `task_name` is the bare task name (e.g. "write-compressor"), not the
-    terminal-bench/<name> instance id.
+    Single reader of the flag, so the adapter and any future caller cannot
+    disagree about whether this arm is on. Default-off matters: these bodies are
+    distilled from the benchmark's own observed failures, so a run with them on
+    measures the model against the task PLUS prior-run knowledge and must not be
+    silently mixed into a baseline arm.
     """
-    body = TASK_ANNOTATIONS.get((task_name or '').strip())
+    return str(os.environ.get(ENV_FLAG) or "").strip().lower() in _TRUTHY
+
+
+def resolve_task_name(raw: str) -> str:
+    """Normalise the shapes a task name actually arrives in to a bare name.
+
+    The adapter sees a trial dir name, and other callers may pass an instance id,
+    so accepting only the bare form would silently drop annotations for some
+    call sites:
+
+        'write-compressor'                 -> 'write-compressor'
+        'terminal-bench/write-compressor'  -> 'write-compressor'
+        'write-compressor__t6wfVjj'        -> 'write-compressor'   (trial dir)
+    """
+    name = str(raw or "").strip()
+    if not name:
+        return ""
+    name = name.rsplit("/", 1)[-1]  # drop an org/dataset prefix
+    if "__" in name:                # drop a trial-hash suffix
+        name = name.rsplit("__", 1)[0]
+    return name.strip()
+
+
+def render_task_annotations(task_name: str, *, require_flag: bool = True) -> str:
+    """Render the annotation block, or "" when disabled or nothing is known.
+
+    `require_flag=True` is what the adapter uses, making the env flag the single
+    gate. Pass False from tooling that inspects the table directly.
+    """
+    if require_flag and not annotations_enabled():
+        return ""
+    body = TASK_ANNOTATIONS.get(resolve_task_name(task_name))
     if not body:
         return ""
     header = "--- task-specific annotations (from task failure analysis) ---"
     return f"{header}\n<task-annotations>\n{body}\n</task-annotations>"
+
+
+def annotated_tasks() -> list[str]:
+    """Tasks that carry an annotation, sorted."""
+    return sorted(TASK_ANNOTATIONS)
 
 
 def annotated_task_count() -> int:
