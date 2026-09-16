@@ -207,18 +207,26 @@ rm -f /etc/apt/apt.conf.d/docker-clean 2>/dev/null || true
 # agent publishes a uv that the verifier then reuses.
 _UV_BOOTSTRAP_BLOCK = _TEST_SH_MIRROR_BLOCK
 
+# Marks a test.sh as already carrying our block. Kept as one constant because the
+# idempotence check and the writer must agree on the exact string.
+_TEST_SH_INJECTED_MARKER = "# Injected by harbor_installed_agent.py for China network"
+
 
 def _inject_test_sh_mirror_block(text: str) -> str | None:
     """Return test.sh with the mirror bootstrap block injected, or None when the
     file is already patched (idempotent). The original uv install line is kept
     (harmless: the block above already ensures uv exists, and the astral curl is
     gated by UV_ALREADY_AVAILABLE via the surrounding `||` guard below)."""
-    if "UV_INDEX_URL" in text:
+    # Idempotence is keyed on OUR marker, not on "UV_INDEX_URL". Task packages in this
+    # cache have been edited to set UV_INDEX_URL themselves, so testing for that string
+    # returned None ("already patched") on exactly the files that most need the block --
+    # the injection silently did nothing and the verifier ran with no PATH to uvx.
+    if _TEST_SH_INJECTED_MARKER in text:
         return None
     lines = text.splitlines()
     if lines and lines[0].startswith("#!"):
         head, rest = lines[0], lines[1:]
-        new_lines = [head, "# Injected by harbor_installed_agent.py for China network"]
+        new_lines = [head, _TEST_SH_INJECTED_MARKER]
         new_lines.extend(_TEST_SH_MIRROR_BLOCK.rstrip("\n").splitlines())
         new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
         gated = []
@@ -830,8 +838,16 @@ PY
                 if command -v uvx >/dev/null 2>&1; then
                   cp -f "$(command -v uvx)" "$PIP_CACHE_DIR/uv-bin/uvx" 2>/dev/null || true
                 fi
+                # Publish BOTH into the venv too. Task test.sh files in this cache put
+                # /opt/ouroboros-venv/bin first on PATH and then call `uvx`; copying only
+                # `uv` there produced "test.sh: line N: uvx: command not found" and a
+                # reward of 0 on every task whose verifier shells out to uvx.
                 cp -f "$(command -v uv)" {_CONTAINER_VENV}/bin/uv 2>/dev/null || true
+                if command -v uvx >/dev/null 2>&1; then
+                  cp -f "$(command -v uvx)" {_CONTAINER_VENV}/bin/uvx 2>/dev/null || true
+                fi
                 chmod -R a+rwX "$PIP_CACHE_DIR/uv-bin" 2>/dev/null || true
+                chmod a+rX {_CONTAINER_VENV}/bin/uv {_CONTAINER_VENV}/bin/uvx 2>/dev/null || true
               fi
               chmod -R a+rX {_CONTAINER_SRC} {_CONTAINER_VENV} /logs/agent
               {_CONTAINER_VENV}/bin/python -c 'import importlib.metadata; print("ouroboros", importlib.metadata.version("ouroboros"))'
@@ -927,7 +943,7 @@ PY
                 lines = text.splitlines()
                 if lines and lines[0].startswith("#!"):
                     head, rest = lines[0], lines[1:]
-                    new_lines = [head, "# Injected by harbor_installed_agent.py for China network"]
+                    new_lines = [head, _TEST_SH_INJECTED_MARKER]
                     new_lines.extend(block.rstrip("\\n").splitlines())
                     new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
                     for line in rest:
