@@ -137,6 +137,27 @@ python devtools/benchmarks/terminal_bench/exp/verify_output.py \
    约 40% 的任务被静默留在默认源。实测 `apt-get update`：默认源 **121 秒** vs 清华 **3 秒**，
    而 agent 安装总预算只有 360 秒。现已同时处理 deb822 `debian.sources` 和 legacy `sources.list`。
 
+## 缓存与镜像：实际覆盖到哪些阶段
+
+三处缓存目录（`OBO_TB_PIP_CACHE` / `OBO_TB_APT_CACHE` / `OBO_TB_HF_CACHE`）通过 bind mount
+进入容器，**agent 安装阶段与验证器阶段共用同一份**（verifier 默认 shared 模式）。
+
+镜像覆盖（按 89 个任务的 test.sh 实际用什么统计）：
+
+| 阶段 | 工具 | 任务数 | 镜像/缓存是否覆盖 |
+|---|---|---|---|
+| agent 安装 | apt | 全部 | ✅ 国内源 + deb 缓存 + 移除 docker-clean |
+| agent 安装 | uv/pip | 全部 | ✅ uv 缓存 + uv 镜像；pip 走回退路径 |
+| 验证器 | `uvx` | 82 | ✅ 复用 agent 装的 uv + UV 索引/缓存 |
+| 验证器 | `apt-get` | **84** | ✅ 已补：deb822/legacy 源改写 + deb 留存 |
+| 验证器 | `pip` | 9 | ✅ 已补：`PIP_INDEX_URL` + `PIP_CACHE_DIR` |
+| 验证器 | `conda` | 2 | ❌ 未覆盖（无对应镜像可指向） |
+
+实测效果：`apt-get update` 在 Debian 12 上 **121 秒 → 3 秒**；安装总耗时（热缓存）**17.7–20.9 秒且零下载**。
+
+镜像命名同时设 `UV_INDEX_URL`（uv ≤0.9）与 `UV_DEFAULT_INDEX`（当前名）——各版本只读自己认识的那个，
+而验证器复用的是它找到的任意 uv，版本不由我们决定。
+
 ## 外部防线（为什么不会因网络/API 失败丢 trial）
 
 | 层 | 措施 |
