@@ -6956,3 +6956,36 @@ def test_terminal_bench_smoke_accepts_harbor_trial_named_outcomes(tmp_path):
     expected = {module._task_key(name) for name in ["terminal-bench/regex-log"]}
     assert observed.issubset(expected)
     assert not expected - observed
+
+
+def test_terminal_bench_triage_timeout_outranks_cancellation_flag():
+    """A declared-timeout cut must not be reported as a broken environment.
+
+    Harbor raises AgentTimeoutError when the task's own [agent] timeout_sec elapses, and
+    its teardown snapshot is then always taken post-cancellation. Reading the consequence
+    before the cause put every budget-exhausted trial on the rerun list.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "tb_triage",
+        REPO_ROOT / "devtools" / "benchmarks" / "terminal_bench" / "exp" / "triage_run.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    timeout_and_cancel = {
+        "reward": 0.0,
+        "exception_type": "AgentTimeoutError",
+        "captured_after_cancellation": True,
+    }
+    bucket, reason = module.classify(timeout_and_cancel)
+    assert bucket == module.TRUNCATION, reason
+    assert "ran out of the task's own budget" in reason
+
+    # A cut with no declared-timeout exception is still rerunnable.
+    bucket, reason = module.classify({"reward": 0.0, "captured_after_cancellation": True})
+    assert bucket == module.INFRA, reason
+
+    # And a clean wrong answer is still genuine.
+    bucket, reason = module.classify({"reward": 0.0})
+    assert bucket == module.GENUINE, reason

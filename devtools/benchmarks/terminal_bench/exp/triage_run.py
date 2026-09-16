@@ -137,15 +137,25 @@ def classify(trial: dict, trial_dir: Path | None = None) -> tuple[str, str]:
     infra_failed = bool(trial.get("infra_failed"))
     after_cancel = bool(trial.get("captured_after_cancellation"))
 
-    # A harness wall-clock cut is not the model's fault: the trial was killed
-    # mid-flight, so it is rerunnable. Kept as its own reason so the caller can
-    # see how much of the rerun list is this rather than a real provider outage.
+    # Dataset-declared agent/verifier timeout is checked BEFORE the cancellation flag,
+    # because the two always arrive together and only one of them carries information.
+    # Harbor raises AgentTimeoutError when the task's own [agent] timeout_sec elapses
+    # (timeout_multiplier 1.0), and its teardown snapshot is then necessarily taken after
+    # the cancellation -- so captured_after_cancellation is a CONSEQUENCE of the timeout.
+    # Testing the consequence first made every task that spent its full declared budget
+    # look like a broken environment: on the regex-log k=5 batch all three finished trials
+    # were AgentTimeoutError (task.toml 900s) yet landed on the rerun list.
+    if exception in TIMEOUT_EXCEPTIONS:
+        reason = f"{exception} (ran out of the task's own budget)"
+        if after_cancel:
+            reason += "; teardown snapshot taken post-cancellation"
+        return TRUNCATION, reason
+
+    # A harness cut with no declared-timeout exception: the trial was killed for a reason
+    # that is not the task's budget (run aborted, operator interrupt), so it is rerunnable.
+    # Kept as its own reason so the caller can see how much of the rerun list is this.
     if after_cancel:
         return INFRA, "captured_after_cancellation (harness cut the trial)"
-
-    # Dataset-declared agent/verifier timeout: a fair shot that ran out of budget.
-    if exception in TIMEOUT_EXCEPTIONS:
-        return TRUNCATION, f"{exception} (ran out of the task's own budget)"
 
     # Any other exception is a setup / verify / harness blow-up -> no fair shot.
     if exception:
