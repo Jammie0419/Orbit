@@ -115,6 +115,11 @@ def _secret_shaped_source_name(name: str) -> bool:
 #    URL, unreachable from CN; a truncated download leaves a corrupt uv/uvx
 #    that shadows the original install line and segfaults).
 _TEST_SH_MIRROR_BLOCK = """export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+# Both names: UV_INDEX_URL is what uv <=0.9 read, UV_DEFAULT_INDEX is the current
+# one. Setting both is safe (each uv version reads the name it knows and ignores
+# the other), and the verifier reuses whatever uv it finds on PATH, so the version
+# there is not ours to pin.
+export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export UV_PYTHON_INSTALL_MIRROR="https://cdn.npmmirror.com/binaries/python-build-standalone"
 # Prefer an already-installed uv over downloading from GitHub (blocked in CN).
 # Each candidate must pass a `--version` smoke test: a truncated download leaves
@@ -165,6 +170,35 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-/opt/ouro-pip-cache}"
 # (verified: fresh container then hits it in ~0.5s instead of re-downloading).
 export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/opt/ouro-pip-cache/uv-python}"
 mkdir -p "$UV_PYTHON_INSTALL_DIR" 2>/dev/null || true
+
+# ---- pip -------------------------------------------------------------------
+# uvx covers 82 of the 89 task test.sh scripts, but 9 of them reach for pip, and
+# without these every such install resolves against pypi.org from CN.
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+export PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/opt/ouro-pip-cache}"
+mkdir -p "$PIP_CACHE_DIR" 2>/dev/null || true
+
+# ---- apt -------------------------------------------------------------------
+# 84 of the 89 task test.sh scripts shell out to apt-get. During a shared-mode run
+# the agent install has already rewritten these sources, but a verifier in its own
+# container has not -- and there deb.debian.org costs ~121s for the index alone
+# (measured) against the verifier's own timeout. Rewriting is idempotent, so doing
+# it unconditionally is cheap in the shared case and decisive in the separate one.
+if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+    sed -i -E 's#URIs: http://[a-z.-]*(ubuntu|security.ubuntu).com/ubuntu/#URIs: http://mirrors.tuna.tsinghua.edu.cn/ubuntu/#g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+fi
+if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+    sed -i -E 's#URIs: https?://[a-z.-]*deb\\.debian\\.org/debian-security#URIs: https://mirrors.tuna.tsinghua.edu.cn/debian-security#g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+    sed -i -E 's#URIs: https?://[a-z.-]*deb\\.debian\\.org/debian#URIs: https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+fi
+sed -i -E 's#(deb|deb-src) http://[a-z.-]*(archive|security).ubuntu.com/ubuntu#\\1 http://mirrors.tuna.tsinghua.edu.cn/ubuntu#g' /etc/apt/sources.list 2>/dev/null || true
+sed -i -E 's#https?://[a-z.-]*deb\\.debian\\.org/debian#https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list 2>/dev/null || true
+# These images ship /etc/apt/apt.conf.d/docker-clean, which deletes
+# /var/cache/apt/archives/*.deb after every apt operation. The verifier installing
+# into a mounted /var/cache/apt is exactly the case where keeping them pays off:
+# the next trial of the same task installs offline.
+rm -f /etc/apt/apt.conf.d/docker-clean 2>/dev/null || true
 """
 
 # Single source of truth for how uv is located and, only if genuinely absent,
