@@ -647,6 +647,19 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
                   sed -i -E 's#URIs: http://[a-z.-]*(ubuntu|security.ubuntu).com/ubuntu/#URIs: http://mirrors.tuna.tsinghua.edu.cn/ubuntu/#g' /etc/apt/sources.list.d/ubuntu.sources || true
                 fi
                 sed -i -E 's#(deb|deb-src) http://[a-z.-]*(archive|security).ubuntu.com/ubuntu#\\1 http://mirrors.tuna.tsinghua.edu.cn/ubuntu#g' /etc/apt/sources.list 2>/dev/null || true
+                # Debian-family images (about 40% of the task images here: VERSION_ID=12,
+                # bookworm) use deb.debian.org, which the ubuntu rules above never match, so
+                # they were silently left on the default mirror. Measured with apt-get update
+                # on alexgshaw/fix-git: 121s against deb.debian.org vs 3s against tuna -- and
+                # the whole agent install gets only 360s, so a Debian task on a cold cache
+                # would spend a third of its budget on index refresh alone. The security
+                # rewrite runs first only for readability; the main rewrite's prefix match
+                # would already produce .../debian-security correctly.
+                if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+                  sed -i -E 's#URIs: https?://[a-z.-]*deb\\.debian\\.org/debian-security#URIs: https://mirrors.tuna.tsinghua.edu.cn/debian-security#g' /etc/apt/sources.list.d/debian.sources || true
+                  sed -i -E 's#URIs: https?://[a-z.-]*deb\\.debian\\.org/debian#URIs: https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list.d/debian.sources || true
+                fi
+                sed -i -E 's#https?://[a-z.-]*deb\\.debian\\.org/debian#https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list 2>/dev/null || true
                 apt-get update
                 # Keep the downloaded archives in the mounted cache so later trials can
                 # install offline even if docker-clean reappears from a base layer.
