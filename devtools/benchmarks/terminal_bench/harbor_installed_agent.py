@@ -634,12 +634,23 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
               # 兼容 deb822（ubuntu.sources）和 legacy（sources.list）两种格式。
               if command -v apt-get >/dev/null 2>&1; then
                 export DEBIAN_FRONTEND=noninteractive
+                # Neutralize docker-clean BEFORE any apt work. Debian/Ubuntu images ship
+                # /etc/apt/apt.conf.d/docker-clean, whose DPkg::Post-Invoke and
+                # APT::Update::Post-Invoke hooks `rm -f /var/cache/apt/archives/*.deb`.
+                # That silently defeats the mounted .deb cache: every trial deletes the
+                # archives it just downloaded, so the next trial re-fetches the full
+                # ~33MB over the CN network. Measured before this fix: 52 `Get:` lines
+                # and an empty cache dir (0 .deb, 52K). Removing the hook is container-
+                # local and disposable, which is exactly the scope we want.
+                rm -f /etc/apt/apt.conf.d/docker-clean || true
                 if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
                   sed -i -E 's#URIs: http://[a-z.-]*(ubuntu|security.ubuntu).com/ubuntu/#URIs: http://mirrors.tuna.tsinghua.edu.cn/ubuntu/#g' /etc/apt/sources.list.d/ubuntu.sources || true
                 fi
                 sed -i -E 's#(deb|deb-src) http://[a-z.-]*(archive|security).ubuntu.com/ubuntu#\\1 http://mirrors.tuna.tsinghua.edu.cn/ubuntu#g' /etc/apt/sources.list 2>/dev/null || true
                 apt-get update
-                apt-get install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip
+                # Keep the downloaded archives in the mounted cache so later trials can
+                # install offline even if docker-clean reappears from a base layer.
+                apt-get -o Binary::apt::APT::Keep-Downloaded-Packages=true install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip
               elif command -v apk >/dev/null 2>&1; then
                 apk add --no-cache git curl bash ca-certificates procps python3 py3-pip py3-virtualenv
               elif command -v yum >/dev/null 2>&1; then
