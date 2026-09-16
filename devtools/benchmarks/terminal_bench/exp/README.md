@@ -100,6 +100,40 @@ python devtools/benchmarks/terminal_bench/exp/verify_output.py \
 
 > ATIF trajectory 必须在**首次上传前**存在：README 记载重复上传会跳过已存在的 trial，而 trajectory PUT 失败会静默降级为仅归档，客户端无法修复。缺失用 `build_atif_trajectories.py --job-dir <job> --validate` 补齐。
 
+## 缓存预热：只需要 2 次，不是 89 次
+
+任务镜像**只有 2 个基础发行版**（实测）：`ubuntu 24.04` 约 60%，`debian 12` 约 40%。
+而 agent 装的 apt 包列表是固定的（`git curl bash ca-certificates procps python3 python3-venv python3-pip`），
+所以 deb 缓存按**发行版**复用，不按任务：每个发行版家族跑一个任务预热即可。
+
+镜像和缓存是两回事：
+
+| | Docker 镜像 | 包缓存 |
+|---|---|---|
+| 是什么 | 任务的环境（OS + 任务文件） | **agent 自己**的依赖 |
+| 省掉 | 拉取/构建镜像 | 每个 trial 重下依赖 |
+| 位置 | `docker images`（本地已有 65/89） | `OBO_TB_*_CACHE` 挂载目录 |
+
+**任务镜像里没有 Ouroboros**，agent 依赖是每个 trial 在容器里现装的——镜像齐了不等于缓存热。
+
+实测安装耗时（regex-log）：
+
+| 状态 | 耗时 | 下载 |
+|---|---|---|
+| 无挂载 | >360s 超时失败 | ~232MB |
+| 有挂载，deb 缓存空 | 54.9s | 32.9MB |
+| 有挂载 + 修 docker-clean | 32.2s | 32.9MB（落进缓存） |
+| 缓存热 | **17.7–20.9s** | **0** |
+
+### 两个曾静默削弱缓存的坑（已修）
+
+1. **`docker-clean` 删 deb**：Debian/Ubuntu 镜像的 `/etc/apt/apt.conf.d/docker-clean`
+   在每次 apt 操作后执行 `rm -f /var/cache/apt/archives/*.deb`，导致挂载的 deb 缓存永远是空的
+   （实测 0 个 `.deb`、52K）。现在安装前先移除该钩子。
+2. **Debian 系没走国内镜像**：改写只匹配 `ubuntu.com`，而 Debian 用 `deb.debian.org`，
+   约 40% 的任务被静默留在默认源。实测 `apt-get update`：默认源 **121 秒** vs 清华 **3 秒**，
+   而 agent 安装总预算只有 360 秒。现已同时处理 deb822 `debian.sources` 和 legacy `sources.list`。
+
 ## 外部防线（为什么不会因网络/API 失败丢 trial）
 
 | 层 | 措施 |
