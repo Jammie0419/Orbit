@@ -75,18 +75,35 @@ if [ "${RUNNING:-0}" -gt 0 ]; then
 else
   pass "no leftover containers"
 fi
-# Every task whose image is not cached locally has to come from the registry, and a
-# registry that is unreachable turns "first run of a task" into a failed trial rather
-# than a slow one. /v2/ ALWAYS answers 401 to an unauthenticated request -- it is the
-# auth challenge, not a failure: docker answers it by fetching an anonymous token and
-# retrying, which works for public images. A real problem is an empty reply (000).
-REG_CODE="$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://registry-1.docker.io/v2/ 2>/dev/null)"
-case "$REG_CODE" in
-  401)     pass "image registry reachable (401 = the normal auth challenge, not an error)" ;;
-  200)     pass "image registry reachable (HTTP 200)" ;;
-  000|"")  fail "image registry unreachable — uncached task images cannot be pulled" ;;
-  *)       warn "image registry answered HTTP $REG_CODE (unexpected; pulls may fail)" ;;
-esac
+# Probe the registries docker ACTUALLY uses. Checking registry-1.docker.io tests a
+# path docker never takes on this host (Docker Hub is unreachable directly here) AND
+# one that sits behind the host proxy, which measured 40% failure. daemon.json
+# configures CN mirrors instead, so those are what a pull depends on.
+#
+# /v2/ answering 401 is the normal unauthenticated auth challenge, not a failure:
+# docker answers it by fetching an anonymous token and retrying.
+REG_MIRRORS="$(python3 -c 'import json;print("\n".join(json.load(open("/etc/docker/daemon.json")).get("registry-mirrors",[])))' 2>/dev/null)"
+[ -z "$REG_MIRRORS" ] && REG_MIRRORS="https://registry-1.docker.io"
+REG_ANY_OK=0
+REG_DETAIL=""
+for mirror in $REG_MIRRORS; do
+  code=""
+  for i in $(seq 1 "$RETRIES"); do
+    code="$(curl -s -m 20 -o /dev/null -w '%{http_code}' "${mirror%/}/v2/" 2>/dev/null)"
+    case "$code" in 200|401) break ;; *) [ "$i" -lt "$RETRIES" ] && sleep 2 ;; esac
+  done
+  case "$code" in
+    401) REG_ANY_OK=1; REG_DETAIL="${REG_DETAIL}        ${mirror} → 401 (normal auth challenge)\n" ;;
+    200) REG_ANY_OK=1; REG_DETAIL="${REG_DETAIL}        ${mirror} → 200\n" ;;
+    *)   REG_DETAIL="${REG_DETAIL}        ${mirror} → ${code:-no reply}\n" ;;
+  esac
+done
+if [ "$REG_ANY_OK" = 1 ]; then
+  pass "image registry reachable for docker ($(echo "$REG_MIRRORS" | wc -w | tr -d ' ') configured mirror(s))"
+else
+  fail "no configured registry mirror answered — uncached task images cannot be pulled"
+  printf "%b" "$REG_DETAIL"
+fi
 
 # --------------------------------------------------------------- API liveness
 echo "[3/6] API liveness"
@@ -120,19 +137,28 @@ else
       RESP="$(curl -s -m 30 -X POST "$BASE/chat/completions" "${AUTH[@]}" \
                 -H "Content-Type: application/json" -d "$BODY" 2>/dev/null)"
       case "$RESP" in
+        # SUCCESS IS CHECKED FIRST, on the one field that only a completion has.
+        # Ordering matters here: a successful body legitimately contains a bare
+        # "401" inside its request id (observed: id "...-b6c6-401ebe714425_...") and
+        # a token count can hold one too, so an auth heuristic tested earlier would
+        # reject a perfectly good answer. That produced a ~10% false "credentials
+        # rejected" rate before this was reordered, which is worse than no gate: the
+        # operator learns to ignore it.
+        *'"choices"'*|*'"object":"chat.completion"'*)
+          OK=1; break ;;
         *CreditsError*|*"Insufficient balance"*|*insufficient_quota*)
           fail "account has NO CREDIT — a real completion was rejected"
           echo "        provider said: $(printf '%s' "$RESP" | head -c 240)"
           echo "        every trial would burn its setup time and score 0; top up before running"
           REPORTED=1
           break ;;
-        *Invalid*key*|*invalid_api_key*|*Unauthorized*|*"401"*)
+        # Auth markers, matched on the ERROR SHAPE rather than a loose "401"
+        # substring: the quoted code/type fields these gateways actually emit.
+        *'"type":"invalid_key"'*|*'"Invalid API Key"'*|*invalid_api_key*|*'"code":"401"'*|*'"code":401'*|*Unauthorized*)
           fail "credentials rejected by the provider"
           echo "        provider said: $(printf '%s' "$RESP" | head -c 240)"
           REPORTED=1
           break ;;
-        *'"content"'*|*'"choices"'*|*'"role"'*)
-          OK=1; break ;;
         *)
           [ "$i" -lt "$RETRIES" ] && echo "        unusable response (attempt $i/$RETRIES), waiting ${WAIT_SEC}s..."
           [ "$i" -lt "$RETRIES" ] && sleep "$WAIT_SEC" ;;
@@ -237,18 +263,30 @@ except Exception as exc:
     print("api=fail:%s:%s" % (type(exc).__name__, str(exc)[:110]))
 '
   # Credentials go in as env vars, exactly as a real trial's container receives them.
-  NET_OUT="$(printf '%s' "$PROBE_PY" | docker run --rm -i \
-      -e __URL="$OPENAI_COMPATIBLE_BASE_URL" \
-      -e __KEY="$OPENAI_COMPATIBLE_API_KEY" \
-      -e __MODEL="$PROBE_MODEL" \
-      "$PROBE_IMAGE" python3 - 2>&1)"
+  # RETRIED for the same reason the registry check is: this host's DNS is genuinely
+  # intermittent (measured one container run resolving the host fine and then failing
+  # the same lookup inside urllib with "[Errno -2] Name or service not known"). A gate
+  # that blocks a healthy run on a resolver blip just teaches the operator to ignore it.
+  NET_OUT=""
+  for i in $(seq 1 "$RETRIES"); do
+    NET_OUT="$(printf '%s' "$PROBE_PY" | docker run --rm -i \
+        -e __URL="$OPENAI_COMPATIBLE_BASE_URL" \
+        -e __KEY="$OPENAI_COMPATIBLE_API_KEY" \
+        -e __MODEL="$PROBE_MODEL" \
+        "$PROBE_IMAGE" python3 - 2>&1)"
+    case "$NET_OUT" in
+      *api=ok*) break ;;
+      *) [ "$i" -lt "$RETRIES" ] && sleep 2 ;;
+    esac
+  done
   case "$NET_OUT" in
     *dns=ok*)   pass "container DNS resolves the API host" ;;
     *)          fail "container DNS cannot resolve the API host — every trial would fail" ;;
   esac
   case "$NET_OUT" in
     *api=ok*)   pass "container reached the model API and got a real completion" ;;
-    *)          fail "container could NOT reach the model API — a trial would burn its setup then score 0"
+    *)          fail "container could NOT reach the model API after $RETRIES attempts"
+                echo "        a trial would burn its setup then score 0"
                 echo "        probe said: $(printf '%s' "$NET_OUT" | tr '\n' ' ' | tail -c 240)" ;;
   esac
 fi
