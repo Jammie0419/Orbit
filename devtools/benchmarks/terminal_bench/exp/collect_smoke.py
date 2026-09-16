@@ -159,6 +159,10 @@ def read_trial(trial_dir: pathlib.Path) -> dict:
         "reward": rewards.get("reward"),
         "exception_type": exc_info.get("exception_type"),
         "task_ref": ((data.get("task_id") or {}).get("ref") if isinstance(data.get("task_id"), dict) else None),
+        # Pass@1 is defined as the task's FIRST attempt, so the collector has to carry the
+        # per-trial start time: harbor's job-level result.json groups trials by reward value
+        # and cannot say which one ran first.
+        "started_at": str(data.get("started_at") or ""),
         "error": "",
         "dir": trial_dir,
     }
@@ -450,18 +454,32 @@ def main() -> int:
     )
 
     # ---- pass@k summary (honest: computed over the trials present)
+    # Pass@1 is the task's FIRST attempt -- the reward of the earliest-started trial -- so it is
+    # fixed the moment that trial finishes and is 0/1 per task; it only becomes a rate once
+    # averaged over tasks. Pass@k keeps harbor's semantics over all n trials, so the two can
+    # disagree in direction on one task (pass@1 = 0 with pass@5 > 0 means a later attempt
+    # passed). Mean is the reward average over all n trials.
     print("pass@k over the collected trials")
+    total_first = 0.0
+    total_mean = 0.0
     total_pass_k = 0.0
     for task in sorted(by_task):
-        rows = by_task[task]
+        rows = sorted(by_task[task], key=lambda r: str(r.get("started_at") or "\uffff"))
         n = len(rows)
         n_pass = sum(1 for r in rows if r.get("reward") in (1, 1.0, True))
-        value = _pass_at_k(n, n_pass, args.k)
-        total_pass_k += value
-        print(f"  {value*100:6.1f}%  {n_pass}/{n}  {task}")
-    mean_task_pass_k = total_pass_k / len(by_task) if by_task else 0.0
+        first = 1.0 if rows and rows[0].get("reward") in (1, 1.0, True) else 0.0
+        mean = n_pass / n if n else 0.0
+        value_k = _pass_at_k(n, n_pass, args.k)
+        total_first += first
+        total_mean += mean
+        total_pass_k += value_k
+        print(f"  pass@1 {first*100:6.1f}%   mean {mean*100:6.1f}%   "
+              f"pass@{args.k} {value_k*100:6.1f}%   {n_pass}/{n}  {task}")
+    tasks = len(by_task) or 1
+    mean_task_pass_k = total_pass_k / tasks
     print()
-    print(f"mean per-task pass@{args.k}: {mean_task_pass_k*100:.1f}%  over {len(by_task)} task(s)")
+    print(f"mean over {len(by_task)} task(s): pass@1 {total_first/tasks*100:.1f}%   "
+          f"mean {total_mean/tasks*100:.1f}%   pass@{args.k} {mean_task_pass_k*100:.1f}%")
     if shortfalls:
         print(f"WARNING: {len(shortfalls)} task(s) have fewer than k={args.k} trials; "
               f"their pass@{args.k} is optimistic")

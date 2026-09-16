@@ -140,6 +140,132 @@ def _task_key(instance_id: object) -> str:
     return name.rsplit("__", 1)[0] if "__" in name else name
 
 
+def _pass_at_k(n_trials: int, n_pass: int, k: int) -> float:
+    """Probability that at least one of k samples passes, estimated without replacement:
+    ``1 - C(n-c, k)/C(n, k)``. Harbor's own formula, reproduced here so this launcher
+    need not import harbor to print a score.
+
+    Used only for k >= 2. Pass@1 does NOT use this formula -- see _score_summary.
+    """
+    if n_trials <= 0 or n_pass <= 0:
+        return 0.0
+    if n_trials - n_pass < k:
+        return 1.0
+    ratio = 1.0
+    for i in range(k):
+        ratio *= (n_trials - n_pass - i) / (n_trials - i)
+    return 1.0 - ratio
+
+
+def _pass_columns(max_k: int) -> list[int]:
+    """Harbor's own column set with k=1 added: {2,4,8,...} and {5,10,15,...} up to max_k.
+
+    Harbor omits Pass@1 because its sequence starts at 2, and the omission is invisible --
+    the table just has one fewer column. Pass@1 is the number we report, so it is added
+    here rather than by patching the harness. Mirrors harbor/utils/pass_at_k.py's
+    _eligible_k_values; kept local so this script stays free of a harbor import.
+    """
+    columns = {1}
+    k = 2
+    while k <= max_k:
+        columns.add(k)
+        k *= 2
+    k = 5
+    while k <= max_k:
+        columns.add(k)
+        k += 5
+    return sorted(columns)
+
+
+def _harbor_trial_rows(result_path: pathlib.Path) -> list[dict[str, object]]:
+    """Per-TRIAL rows ``(task, reward, started_at)`` from the trial dirs beside the job result.
+
+    The job-level result.json groups trials by reward VALUE, so it cannot say which trial ran
+    first -- and "ran first" is exactly what Pass@1 means here. Each trial dir keeps its own
+    result.json carrying a started_at, so the execution order is read from there.
+    """
+    rows: list[dict[str, object]] = []
+    for trial_result in sorted(result_path.parent.glob("*/result.json")):
+        try:
+            data = json.loads(trial_result.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or "task_name" not in data:
+            continue  # not a trial result.json
+        verifier = data.get("verifier_result") if isinstance(data.get("verifier_result"), dict) else {}
+        rewards = verifier.get("rewards") if isinstance(verifier.get("rewards"), dict) else {}
+        rows.append({
+            "task": _task_key(data.get("trial_name") or trial_result.parent.name),
+            "reward": rewards.get("reward"),
+            "started_at": str(data.get("started_at") or ""),
+        })
+    return rows
+
+
+def _score_summary(rows: list[dict[str, object]]) -> list[tuple[str, int, int, float]]:
+    """``(task, n_trials, n_passing, first_reward)`` per task, sorted.
+
+    An unscored trial counts as 0, matching harbor, which treats a missing verifier_result as
+    a zero rather than as grounds to drop the task. ``first_reward`` is the reward of the
+    trial with the earliest started_at -- the task's FIRST attempt.
+    """
+    by_task: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        task = str(row.get("task") or "")
+        if task:
+            by_task.setdefault(task, []).append(row)
+    summary: list[tuple[str, int, int, float]] = []
+    for task, task_rows in sorted(by_task.items()):
+        # Empty started_at sorts last: an unknown time must not be crowned "first".
+        ordered = sorted(task_rows, key=lambda row: str(row.get("started_at") or "\uffff"))
+        passes = [1 if row.get("reward") in (1, 1.0, True) else 0 for row in ordered]
+        summary.append((task, len(passes), sum(passes), float(passes[0])))
+    return summary
+
+
+def _print_score_summary(rows: list[dict[str, object]]) -> None:
+    """Print our own score table under Harbor's, with the Pass@1 column Harbor omits.
+
+    Pass@1 is the FIRST trial's reward, not an estimate over n: a task's pass@1 is fixed the
+    moment its first trial finishes, so it is a 0/1 "succeeded on the first attempt" indicator
+    and only becomes a rate once averaged over tasks. Pass@2/4/5 keep Harbor's semantics over
+    all n trials, so they match the numbers Harbor printed above. The two can disagree in
+    direction on a single task (Pass@1 = 0 while Pass@2 > 0 means the second attempt passed) --
+    that is the definitions differing, not an arithmetic error.
+    """
+    summary = _score_summary(rows)
+    if not summary:
+        return
+    columns = _pass_columns(min(n for _, n, _, _ in summary))
+    widest = max(len(task) for task, _, _, _ in summary) + 2
+    # Mean first (the reward average), then Pass@1 (first attempt), then harbor's columns.
+    heads = ["Mean", "Pass@1"] + [f"Pass@{k}" for k in columns if k != 1]
+    print()
+    print("scores -- Pass@1: reward of the FIRST trial started (0/1, \"passed on the first "
+          "attempt\"); Pass@2/4/5: Harbor's P(at least one of k passes) over all n trials; "
+          "Mean: reward average over all n trials")
+    print("  " + f"{'task':<{widest}}" + f"{'n':>3}" + "".join(f"{head:>10}" for head in heads))
+    totals = [0.0] * len(heads)
+    for task, n, n_pass, first in summary:
+        values = [n_pass / n if n else 0.0, first] + [
+            _pass_at_k(n, n_pass, k) for k in columns if k != 1
+        ]
+        totals = [total + value for total, value in zip(totals, values)]
+        print(f"  {task:<{widest}}{n:>3}" + "".join(f"{value:>10.3f}" for value in values))
+    label = f"mean over {len(summary)} task(s)"
+    print(f"  {label:<{widest}}{'':>3}"
+          + "".join(f"{total / len(summary):>10.3f}" for total in totals))
+    largest = max(columns)
+    short = [task for task, n, _, _ in summary if n < largest]
+    if short:
+        print(f"  NOTE: {len(short)} task(s) have fewer than {largest} trials "
+              f"({', '.join(short[:3])}{', ...' if len(short) > 3 else ''}) -- "
+              f"their Pass@{largest} reads 1.000 whenever they have any pass, so it is optimistic")
+    if any(not str(row.get("started_at") or "") for row in rows):
+        print("  NOTE: at least one trial has no started_at, so which trial counts as Pass@1 "
+              "is not fully determined for that task")
+
+
 def _harbor_task_outcomes(result_path: pathlib.Path) -> list[dict[str, object]]:
     try:
         data = json.loads(result_path.read_text(encoding="utf-8"))
@@ -407,6 +533,8 @@ def main() -> int:
         if not args.execute:
             final.update({"outcome": "command_generated", "exit_code": 0})
             return 0
+        if observed_outcomes and not harbor_result_error and harbor_result is not None:
+            _print_score_summary(_harbor_trial_rows(harbor_result))
         final.update({"outcome": status, "exit_code": int(returncode)})
         return returncode
 

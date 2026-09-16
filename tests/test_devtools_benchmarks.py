@@ -6989,3 +6989,41 @@ def test_terminal_bench_triage_timeout_outranks_cancellation_flag():
     # And a clean wrong answer is still genuine.
     bucket, reason = module.classify({"reward": 0.0})
     assert bucket == module.GENUINE, reason
+
+
+def test_terminal_bench_smoke_pass_at_1_is_the_first_trial_started():
+    """Pass@1 is the FIRST attempt, not an estimate over n.
+
+    A task's pass@1 is fixed the moment its first trial finishes, so it is read from the
+    earliest started_at -- which the job-level result.json cannot express, because it groups
+    trials by reward value. Feeding the rows in a scrambled order must not change the answer.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "tb_harbor_smoke",
+        REPO_ROOT / "devtools" / "benchmarks" / "terminal_bench" / "run_harbor_smoke.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    rows = [
+        {"task": "t", "reward": 1.0, "started_at": "2026-01-01T00:04:00Z"},
+        {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:01:00Z"},  # first -> 0
+        {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:03:00Z"},
+        {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:02:00Z"},
+        {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:05:00Z"},
+    ]
+    task, n, n_pass, first = module._score_summary(rows)[0]
+    assert (task, n, n_pass) == ("t", 5, 1)
+    assert first == 0.0, "Pass@1 must be the earliest trial, not the first row given"
+    assert module._score_summary(list(reversed(rows)))[0][3] == 0.0
+
+    # The mean and Harbor's Pass@k are unaffected by ordering.
+    assert n_pass / n == 0.2
+    assert module._pass_at_k(n, n_pass, 5) == 1.0
+    assert round(module._pass_at_k(n, n_pass, 2), 6) == 0.4
+
+    # A trial with no started_at must not be crowned first: empty sorts last.
+    unknown = [{"task": "t", "reward": 1.0, "started_at": ""},
+               {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:01:00Z"}]
+    assert module._score_summary(unknown)[0][3] == 0.0
