@@ -52,12 +52,22 @@ else
   fail "OPENAI_COMPATIBLE_BASE_URL is unset"
 fi
 
-# ------------------------------------------------------------------- docker
-echo "[2/5] docker"
+# -------------------------------------------------------------- docker + harbor
+echo "[2/5] docker and harbor CLI"
 if docker info >/dev/null 2>&1; then
   pass "docker daemon reachable"
 else
   fail "docker daemon not reachable — harbor cannot create task containers"
+fi
+# The harbor CLI lives in the venv, so a forgotten `source .venv/bin/activate` costs
+# a whole invocation. Observed failure: harbor raises
+# `PermissionError: [Errno 13] Permission denied: 'harbor'` (not FileNotFoundError),
+# which reads like a broken binary rather than a missing PATH entry.
+HARBOR_BIN="$(command -v harbor || true)"
+if [ -n "$HARBOR_BIN" ]; then
+  pass "harbor on PATH: $HARBOR_BIN"
+else
+  fail "harbor not on PATH — run 'source .venv/bin/activate' first (the CLI lives in .venv/bin)"
 fi
 RUNNING="$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
 if [ "${RUNNING:-0}" -gt 0 ]; then
@@ -90,6 +100,10 @@ else
     BODY="$(printf '{"model":"%s","messages":[{"role":"user","content":"ping"}],"max_tokens":5}' "$PROBE_MODEL")"
     RESP=""
     OK=0
+    REPORTED=0   # local: a SPECIFIC verdict was already printed for this probe.
+                 # Using the global $FAIL here instead would swallow the generic
+                 # message whenever an earlier section had already failed, leaving
+                 # "BLOCKED" with no explanation of the API failure.
     for i in $(seq 1 "$RETRIES"); do
       RESP="$(curl -s -m 30 -X POST "$BASE/chat/completions" "${AUTH[@]}" \
                 -H "Content-Type: application/json" -d "$BODY" 2>/dev/null)"
@@ -98,10 +112,12 @@ else
           fail "account has NO CREDIT — a real completion was rejected"
           echo "        provider said: $(printf '%s' "$RESP" | head -c 240)"
           echo "        every trial would burn its setup time and score 0; top up before running"
+          REPORTED=1
           break ;;
         *Invalid*key*|*invalid_api_key*|*Unauthorized*|*"401"*)
           fail "credentials rejected by the provider"
           echo "        provider said: $(printf '%s' "$RESP" | head -c 240)"
+          REPORTED=1
           break ;;
         *'"content"'*|*'"choices"'*|*'"role"'*)
           OK=1; break ;;
@@ -112,7 +128,7 @@ else
     done
     if [ "$OK" = 1 ]; then
       pass "model '$PROBE_MODEL' answered a real completion"
-    elif [ "$FAIL" = 0 ]; then
+    elif [ "$REPORTED" = 0 ]; then
       fail "no usable completion after $RETRIES attempts — last response: $(printf '%s' "$RESP" | head -c 200)"
     fi
   fi
@@ -134,12 +150,21 @@ for VAR in OBO_TB_PIP_CACHE OBO_TB_APT_CACHE OBO_TB_HF_CACHE; do
     pass "$VAR=$DIR"
   fi
 done
-FREE_GB="$(df -BG --output=avail /mnt/disk2/lzm 2>/dev/null | tail -1 | tr -dc '0-9')"
-if [ -n "$FREE_GB" ] && [ "$FREE_GB" -lt 20 ]; then
-  fail "only ${FREE_GB}G free on /mnt/disk2 — a full k=5 run needs far more"
-elif [ -n "$FREE_GB" ]; then
-  pass "${FREE_GB}G free on /mnt/disk2"
-fi
+# Check the filesystems a run actually fills, not a hardcoded path: the caches and
+# docker's storage root can both live somewhere other than where they did the last
+# time this was edited, and a check that looks at the wrong disk reports green while
+# the real one is full. Container layers (docker root) are the larger consumer.
+DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)"
+for TARGET in "${OBO_TB_PIP_CACHE:-}" "${DOCKER_ROOT:-}"; do
+  [ -n "$TARGET" ] && [ -d "$TARGET" ] || continue
+  FREE_GB="$(df -BG --output=avail "$TARGET" 2>/dev/null | tail -1 | tr -dc '0-9')"
+  [ -n "$FREE_GB" ] || continue
+  if [ "$FREE_GB" -lt 20 ]; then
+    fail "only ${FREE_GB}G free on ${TARGET} — a k=5 run needs far more (layers + caches)"
+  else
+    pass "${FREE_GB}G free on ${TARGET}"
+  fi
+done
 
 # ------------------------------------------------------------- task images
 echo "[5/5] task images"
@@ -153,6 +178,7 @@ else
   CACHE_ROOT="${HOME}/.cache/harbor/tasks/packages/terminal-bench"
   MISSING=0
   TOTAL=0
+  MISSING_LIST=""
   while IFS= read -r raw; do
     NAME="$(echo "$raw" | sed 's/^terminal-bench\///' | tr -d '[:space:]')"
     [ -z "$NAME" ] && continue
@@ -169,13 +195,21 @@ else
       :
     else
       MISSING=$((MISSING + 1))
+      MISSING_LIST="${MISSING_LIST}        ${NAME}\n"
     fi
   done < "$TASKS_FILE"
   if [ "$MISSING" -eq 0 ]; then
     pass "all $TOTAL task images present locally"
   else
-    warn "$MISSING/$TOTAL task images not cached — first run pays the build/pull"
-    echo "        run once with --force-build, or let setup absorb it"
+    # NOT a blocker: an absent image is pulled (or built, for the tasks that ship a
+    # Dockerfile) on first use and cached from then on. Do NOT suggest --force-build
+    # here -- that rebuilds even a perfectly good cached image, which is the opposite
+    # of what this warning is about, and it is not how the accepted submissions run
+    # (8/10 pin environment.force_build=false).
+    warn "$MISSING/$TOTAL task images not cached yet"
+    printf "%b" "$MISSING_LIST"
+    echo "        not a blocker: each is pulled/built once on first use, then reused."
+    echo "        to pay that cost up front instead, run one throwaway trial per image."
   fi
 fi
 
