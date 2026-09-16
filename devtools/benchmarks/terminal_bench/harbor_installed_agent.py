@@ -230,13 +230,19 @@ def _copy_clean_source(source: Path, target: Path) -> None:
         "repo_bundle_manifest.json",
     }
 
-    def ignore(_: str, names: list[str]) -> set[str]:
+    def ignore(current_dir: str, names: list[str]) -> set[str]:
         ignored: set[str] = set()
+        # Annotation bodies are keyed by task name, and at least one task name trips the
+        # secret-shaped heuristic: `count-dataset-tokens.txt` matches ("token" plus a
+        # text extension) and would be dropped from the upload, silently disabling that
+        # one task's annotation while the enable flag still reads as on. Exempt precisely
+        # this directory; the heuristic keeps applying everywhere else in the tree.
+        in_annotations_dir = Path(current_dir).name == "annotations"
         for name in names:
             if name in excluded_dirs or name in excluded_names:
                 ignored.add(name)
                 continue
-            if _secret_shaped_source_name(name):
+            if not in_annotations_dir and _secret_shaped_source_name(name):
                 ignored.add(name)
                 continue
             if any(name.endswith(suffix) for suffix in excluded_suffixes):

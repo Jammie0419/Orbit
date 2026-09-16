@@ -1,0 +1,5 @@
+1. 先备份再动手（最高优先级）：一上来就把 /app/main.db*（含 main.db-wal）全部 cp 到 /tmp 做只读备份，后续所有分析只用备份副本。WAL 里是缺失记录的唯二来源（main.db 只有 5 条、目标 11 条），原件一毁数据就拿不回来。
+2. 禁止用 sqlite3（或任何会改写文件的库）打开损坏/加密的 WAL：sqlite3 遇到无法解析的 WAL 会把它重置/删除——这是已知真实失败案例（agent 用 sqlite3.connect 打开后 WAL 就消失了）。分析一律只读：cp/xxd/python 读字节、XOR 解密写回 /tmp 副本、用 sqlite3 "file:/app/main.db?mode=ro" 只读打开主库。
+3. 解密方法：WAL 是单字节 XOR 0x42 加密（文件里占多数的 'B' 字节就是 0x42）。XOR 0x42 后 WAL 头应对得上合法 magic 0x377f0682，页数据应解出 'SQLite format 3'。确认解密后再做合并。
+4. 交付物：/app/recovered.json = main.db 的 5 条 + WAL 里的 6 条 = 全部 11 条记录（按验收要求字段、排序、无重复 ID）。前 50% 预算内必须先落盘一个含已知数据的骨架版本，再补全 WAL 部分——宁可先交部分正确数据，也不要 deadline 时文件不存在。
+5. 常见陷阱：1) 全程保持只读，任何可能触发 checkpoint/归并/重写的操作都会毁掉证据；2) WAL 丢失后不要翻无关目录（如 datasets 里的 parquet 训练数据）找数据，应回到 /tmp 备份副本；3) 解密产物和 recovered.json 都写 /tmp 或 /app 的新文件，绝不复写原 WAL。

@@ -1,0 +1,4 @@
+1. 关键测试场景：当 n_tasks > max_concurrent 时发送 SIGINT，必须确保所有已启动的任务（包括正在等待信号量的）都执行清理代码。
+2. 实现要点：语义必须是「信号量等待 + 任务执行 + 清理」在同一作用域内——参考解法用 async with semaphore 包住任务体即可，手动 try/finally + acquire/release 也可以，但不要在 except CancelledError 里对子任务再次 cancel()。
+3. 常见陷阱：外部 SIGINT 时，运行中任务的 finally 清理可能正执行到 await 中间（如 await asyncio.sleep），此时对子任务再 cancel() 一次会打断清理，导致清理代码（如 print('Cleaned up.')）永远执行不到。稳妥写法：except asyncio.CancelledError 后只 await asyncio.gather(*running, return_exceptions=True) 再 raise，绝不重复 cancel；或直接用 asyncio.TaskGroup（它等所有子任务完成清理后才抛 CancelledError，天然不会二次取消）。
+4. 验证方法（必须与验收同构）：写独立脚本用子进程跑 python test.py --n-tasks 3 --max-concurrent 2，约 500ms 后向该进程发 SIGINT（proc.send_signal(signal.SIGINT)），断言 stdout 里 'Task started.' 和 'Cleaned up.' 各出现 2 次。只做进程内主动 cancel() 的测试与验收场景不同构，测不出这个 bug。
