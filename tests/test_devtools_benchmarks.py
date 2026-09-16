@@ -7018,8 +7018,10 @@ def test_terminal_bench_smoke_pass_at_1_is_the_first_trial_started():
     assert first == 0.0, "Pass@1 must be the earliest trial, not the first row given"
     assert module._score_summary(list(reversed(rows)))[0][3] == 0.0
 
-    # The mean and Harbor's Pass@k are unaffected by ordering.
-    assert n_pass / n == 0.2
+    # The official pass@1 -- Chen et al. 2021's 1-C(n-c,k)/C(n,k) at k=1 -- is c/n, and is
+    # therefore independent of ordering and equal to the reward mean.
+    # approx, not ==: the formula computes 1 - 0.8, which is 0.19999999999999996.
+    assert module._pass_at_k(n, n_pass, 1) == pytest.approx(n_pass / n) == pytest.approx(0.2)
     assert module._pass_at_k(n, n_pass, 5) == 1.0
     assert round(module._pass_at_k(n, n_pass, 2), 6) == 0.4
 
