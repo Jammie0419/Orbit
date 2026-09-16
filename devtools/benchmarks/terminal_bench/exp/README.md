@@ -174,7 +174,7 @@ python devtools/benchmarks/terminal_bench/exp/triage_run.py \
 | `failed_tasks.txt` | v0 的 35 个失败任务 |
 | `remaining_tasks.txt` | 待补跑的 infra 任务（triage 生成） |
 | `task_metadata.md` | 89 个任务的官方限制（超时/资源/难度） |
-| `capabilities/` | 从历史运行输出恢复的能力规则与任务注释 |
+| `capabilities/task_annotations.py` | 14 个任务的历史失败注解（默认关闭，`OUROBOROS_TB_TASK_ANNOTATIONS=1` 打开） |
 
 ## ⚠️ 三个必须知道的坑
 
