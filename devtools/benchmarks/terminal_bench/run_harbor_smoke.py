@@ -346,9 +346,11 @@ def main() -> int:
                     missing = sorted(expected_ids - observed_ids)
                     if missing:
                         harbor_result_error = f"Harbor result omitted requested task ids: {missing}"
-                elif len(observed_outcomes) != effective_n_tasks:
+                elif len(observed_ids) != effective_n_tasks:
+                    # Distinct task keys, not raw outcome count: one task at k=5 yields five
+                    # outcome rows, which against `--n-tasks 1` read as a mismatch.
                     harbor_result_error = (
-                        f"Harbor result completed {len(observed_outcomes)} outcomes, expected {effective_n_tasks}"
+                        f"Harbor result completed {len(observed_ids)} tasks, expected {effective_n_tasks}"
                     )
                 if harbor_result_error:
                     status = "harness_failed"
