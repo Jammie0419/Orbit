@@ -40,7 +40,7 @@ echo "Terminal-Bench pre-flight"
 echo "-------------------------"
 
 # ---------------------------------------------------------------- credentials
-echo "[1/5] credentials"
+echo "[1/6] credentials"
 if [ -n "${OPENAI_COMPATIBLE_API_KEY:-}" ]; then
   pass "OPENAI_COMPATIBLE_API_KEY is set"
 else
@@ -53,7 +53,7 @@ else
 fi
 
 # -------------------------------------------------------------- docker + harbor
-echo "[2/5] docker and harbor CLI"
+echo "[2/6] docker and harbor CLI"
 if docker info >/dev/null 2>&1; then
   pass "docker daemon reachable"
 else
@@ -75,9 +75,18 @@ if [ "${RUNNING:-0}" -gt 0 ]; then
 else
   pass "no leftover containers"
 fi
+# Every task whose image is not cached locally has to come from the registry, and a
+# registry that is unreachable turns "first run of a task" into a failed trial.
+# /v2/ answering 401 is the NORMAL unauthenticated response; it proves reachability.
+REG_CODE="$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://registry-1.docker.io/v2/ 2>/dev/null)"
+case "$REG_CODE" in
+  200|401) pass "image registry reachable (HTTP $REG_CODE)" ;;
+  000|"")  fail "image registry unreachable — uncached task images cannot be pulled" ;;
+  *)       warn "image registry answered HTTP $REG_CODE (unexpected; pulls may fail)" ;;
+esac
 
 # --------------------------------------------------------------- API liveness
-echo "[3/5] API liveness"
+echo "[3/6] API liveness"
 if [ -z "${OPENAI_COMPATIBLE_BASE_URL:-}" ]; then
   skip "no base URL to probe"
 else
@@ -135,7 +144,7 @@ else
 fi
 
 # ------------------------------------------------------- cache mounts + disk
-echo "[4/5] cache mounts and disk"
+echo "[4/6] cache mounts and disk"
 for VAR in OBO_TB_PIP_CACHE OBO_TB_APT_CACHE OBO_TB_HF_CACHE; do
   DIR="${!VAR:-}"
   if [ -z "$DIR" ]; then
@@ -150,6 +159,23 @@ for VAR in OBO_TB_PIP_CACHE OBO_TB_APT_CACHE OBO_TB_HF_CACHE; do
     pass "$VAR=$DIR"
   fi
 done
+# A cache directory that exists but was never populated looks identical to a warm one
+# from the outside, and the difference is 200MB per trial. Name the two artifacts that
+# actually have to be there for the caches to do anything.
+UV_PROBE="${OBO_TB_PIP_CACHE:-}/uv-bin/uv"
+if [ -n "${OBO_TB_PIP_CACHE:-}" ] && [ -x "$UV_PROBE" ]; then
+  pass "uv binary staged for the verifier: $UV_PROBE"
+elif [ -n "${OBO_TB_PIP_CACHE:-}" ]; then
+  warn "no uv at $UV_PROBE — the verifier will try to download one (CN: slow, can fail)"
+fi
+if [ -n "${OBO_TB_APT_CACHE:-}" ] && [ -d "${OBO_TB_APT_CACHE:-}" ]; then
+  DEB_COUNT="$(find "${OBO_TB_APT_CACHE}" -name '*.deb' 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${DEB_COUNT:-0}" -gt 0 ]; then
+    pass "apt .deb cache holds $DEB_COUNT archive(s)"
+  else
+    warn "apt .deb cache is empty — the next apt install re-downloads ~33MB (check docker-clean)"
+  fi
+fi
 # Check the filesystems a run actually fills, not a hardcoded path: the caches and
 # docker's storage root can both live somewhere other than where they did the last
 # time this was edited, and a check that looks at the wrong disk reports green while
@@ -166,8 +192,66 @@ for TARGET in "${OBO_TB_PIP_CACHE:-}" "${DOCKER_ROOT:-}"; do
   fi
 done
 
+# --------------------------------------------------------- container egress
+echo "[5/6] container egress"
+# The agent runs INSIDE the container and calls the model API from there, so a probe
+# from this host proves the wrong thing: host reachability and container reachability
+# are different network namespaces. If container egress were broken, the host probe
+# above would still pass and every trial would die on its first LLM call. This is the
+# same failure the host probe exists to catch, one namespace over.
+PROBE_IMAGE=""
+for candidate in python:3.12-slim python:3.11-slim python:3.12-slim-bookworm python:3.12; do
+  if docker image inspect "$candidate" >/dev/null 2>&1; then PROBE_IMAGE="$candidate"; break; fi
+done
+if [ -z "$PROBE_IMAGE" ]; then
+  skip "no local python image to probe with (a python:3.12-slim exists on most hosts)"
+elif [ -z "${OPENAI_COMPATIBLE_BASE_URL:-}" ] || [ -z "${OPENAI_COMPATIBLE_API_KEY:-}" ]; then
+  skip "no credentials to probe the container with"
+elif [ -z "${PROBE_MODEL:-}" ]; then
+  skip "no probe model to name in the container request"
+else
+  PROBE_PY='
+import json, os, socket, sys, urllib.request
+base = os.environ["__URL"].rstrip("/")
+host = base.split("//", 1)[-1].split("/", 1)[0]
+try:
+    socket.getaddrinfo(host, 443)
+    print("dns=ok")
+except Exception as exc:
+    print("dns=fail", type(exc).__name__)
+try:
+    req = urllib.request.Request(
+        base + "/chat/completions",
+        data=json.dumps({"model": os.environ["__MODEL"],
+                         "messages": [{"role": "user", "content": "hi"}],
+                         "max_tokens": 3}).encode(),
+        headers={"Authorization": "Bearer " + os.environ["__KEY"],
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = json.load(resp)
+    print("api=ok" if body.get("choices") else "api=fail:empty-body")
+except Exception as exc:
+    print("api=fail:%s:%s" % (type(exc).__name__, str(exc)[:110]))
+'
+  # Credentials go in as env vars, exactly as a real trial's container receives them.
+  NET_OUT="$(printf '%s' "$PROBE_PY" | docker run --rm -i \
+      -e __URL="$OPENAI_COMPATIBLE_BASE_URL" \
+      -e __KEY="$OPENAI_COMPATIBLE_API_KEY" \
+      -e __MODEL="$PROBE_MODEL" \
+      "$PROBE_IMAGE" python3 - 2>&1)"
+  case "$NET_OUT" in
+    *dns=ok*)   pass "container DNS resolves the API host" ;;
+    *)          fail "container DNS cannot resolve the API host — every trial would fail" ;;
+  esac
+  case "$NET_OUT" in
+    *api=ok*)   pass "container reached the model API and got a real completion" ;;
+    *)          fail "container could NOT reach the model API — a trial would burn its setup then score 0"
+                echo "        probe said: $(printf '%s' "$NET_OUT" | tr '\n' ' ' | tail -c 240)" ;;
+  esac
+fi
+
 # ------------------------------------------------------------- task images
-echo "[5/5] task images"
+echo "[6/6] task images"
 if [ "$CHECK_IMAGES" = 0 ]; then
   skip "image check disabled (--quick)"
 elif [ -z "$TASKS_FILE" ]; then
