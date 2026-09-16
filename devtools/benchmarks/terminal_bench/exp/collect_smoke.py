@@ -55,7 +55,12 @@ import shutil
 import sys
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
+    # .../<repo>/devtools/benchmarks/terminal_bench/exp/collect_smoke.py
+    # parents[4] is the repo root. parents[3] is `devtools`, which is neither a package
+    # root nor importable, so `import devtools...` fails. The sibling runners live one
+    # level up (terminal_bench/) where parents[3] IS the repo root, which is why this
+    # only bit the script run the way exp/README.md documents: without PYTHONPATH set.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[4]))
 
 from devtools.benchmarks.terminal_bench.run_tb import (
     HarborCommandConfig,
