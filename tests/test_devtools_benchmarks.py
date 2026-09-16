@@ -6913,3 +6913,46 @@ def test_scrubber_refuses_symlinks_instead_of_writing_through_them(tmp_path, cap
     monkeypatch.setattr(sys, "argv", argv)
     assert scrub.main() == 0
     assert fake not in (pack / "normal.txt").read_text(encoding="utf-8")
+
+
+def test_terminal_bench_smoke_accepts_harbor_trial_named_outcomes(tmp_path):
+    """Harbor reports outcomes under the TRIAL name; the CLI filter is `org/name`.
+
+    An unnormalized comparison made every smoke run -- clean ones included -- record
+    harness_failed/harbor_result_unresolved and discard the fact that harbor exited 0.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "tb_harbor_smoke",
+        REPO_ROOT / "devtools" / "benchmarks" / "terminal_bench" / "run_harbor_smoke.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module._task_key("terminal-bench/regex-log") == "regex-log"
+    assert module._task_key("regex-log__rYVxmUv") == "regex-log"
+    assert module._task_key("regex-log") == "regex-log"
+    assert module._task_key(None) == ""
+
+    result = tmp_path / "result.json"
+    result.write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "evals": {
+                        "Ouroboros Installed__model__terminal-bench/terminal-bench-2-1": {
+                            "reward_stats": {"reward": {"0.0": ["regex-log__rYVxmUv"]}}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    outcomes = module._harbor_task_outcomes(result)
+    assert outcomes == [{"instance_id": "regex-log__rYVxmUv", "reward": 0.0}]
+
+    observed = {module._task_key(item["instance_id"]) for item in outcomes}
+    expected = {module._task_key(name) for name in ["terminal-bench/regex-log"]}
+    assert observed.issubset(expected)
+    assert not expected - observed

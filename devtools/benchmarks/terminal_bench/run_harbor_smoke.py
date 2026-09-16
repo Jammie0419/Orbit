@@ -125,6 +125,21 @@ def _new_harbor_result(run_root: pathlib.Path, before: set[pathlib.Path]) -> pat
     return new_results[0]
 
 
+def _task_key(instance_id: object) -> str:
+    """Reduce an id to its bare task name so the two id shapes Harbor uses can be compared.
+
+    The CLI filters are written `org/name` (`terminal-bench/regex-log`) but harbor reports
+    outcomes keyed by TRIAL name (`regex-log__rYVxmUv`), so an unnormalized set comparison
+    never matches: every smoke run -- including clean ones -- was stamped
+    harness_failed/harbor_result_unresolved, discarding the fact that harbor exited 0.
+    """
+    name = str(instance_id or "").strip()
+    if not name:
+        return ""
+    name = name.rsplit("/", 1)[-1]
+    return name.rsplit("__", 1)[0] if "__" in name else name
+
+
 def _harbor_task_outcomes(result_path: pathlib.Path) -> list[dict[str, object]]:
     try:
         data = json.loads(result_path.read_text(encoding="utf-8"))
@@ -320,8 +335,8 @@ def main() -> int:
                     returncode = returncode or 2
             if harbor_result is not None:
                 observed_outcomes = _harbor_task_outcomes(harbor_result)
-                observed_ids = {str(item.get("instance_id") or "") for item in observed_outcomes}
-                expected_ids = set(actual_include_filters)
+                observed_ids = {_task_key(item.get("instance_id")) for item in observed_outcomes}
+                expected_ids = {_task_key(name) for name in actual_include_filters}
                 if not observed_outcomes and effective_n_tasks > 0:
                     harbor_result_error = "Harbor result contained no parseable task outcomes"
                 elif expected_ids and not observed_ids.issubset(expected_ids):
