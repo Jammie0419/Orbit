@@ -1,0 +1,162 @@
+# Terminal-Bench 实验目录
+
+逐任务跑冒烟、最后收集成**榜单官方排版**的工作流。目标是让 pass@5 的结果既反映模型能力，又能以官方形态交付。
+
+## 工作流总览
+
+```
+① 跑前预检   →  ② 逐任务冒烟（k=5）  →  ③ 收集成官方排版  →  ④ 校验
+preflight.sh     run_harbor_smoke.py     collect_smoke.py     verify_output.py
+```
+
+## ① 跑前预检
+
+```bash
+source .venv/bin/activate
+source .env.terminal_bench.linux
+
+./devtools/benchmarks/terminal_bench/exp/preflight.sh \
+  --tasks-file devtools/benchmarks/terminal_bench/exp/all_tasks.txt
+```
+
+检查凭证 / docker / API 探活 / 缓存挂载 / 磁盘 / 任务镜像。任一不过就拒绝启动——把外部故障挡在花钱之前。
+
+## ② 逐任务冒烟
+
+一次一个任务，每个任务一个独立的 run root（保证每次的 `run_manifest.json` 和 `result_index.jsonl` 都干净）：
+
+```bash
+python devtools/benchmarks/terminal_bench/run_harbor_smoke.py \
+  --task terminal-bench/regex-log \
+  --model "$TERMINAL_BENCH_MODEL" \
+  --k 5 \
+  --run-root ~/bench_runs/terminal_bench/exp/smoke/regex-log \
+  --allow-dirty-seed \
+  --execute
+```
+
+> **镜像默认复用**。`--force-build` 现在是显式开关、默认关闭——只有确实要重建镜像时才加它。
+
+> **冷缓存需要放大安装超时。** harbor 的 agent 安装默认只给 360 秒，而容器内要装约 200MB 的大包（claude-agent-sdk 87MB、playwright 45MB…）。实测：缓存冷时会撞 `AgentSetupTimeoutError: Agent setup timed out after 360.0 seconds`；把 `uv`/`pip` 缓存预热后（挂载目录 `/mnt/disk2/lzm/ouro-pip-cache`，本次预热后 9.0G）同一任务就能在窗口内装完。两种处理：
+>
+> - **本地实验**：带上 `$TERMINAL_BENCH_LOCAL_GUARD`（内含 setup×3 / build×2），但产物失去榜单资格；
+> - **要提交**：先跑一次预热缓存，用默认超时重跑——官方认可的替代做法是预构建镜像，而不是放大超时。
+
+## ③ 收集成官方排版
+
+把散落的逐任务产物合并成**一个**官方形态的 submission 树：
+
+```bash
+python devtools/benchmarks/terminal_bench/exp/collect_smoke.py \
+  --model "$TERMINAL_BENCH_MODEL" \
+  --out ~/bench_runs/terminal_bench/exp/campaign \
+  --scan ~/bench_runs/terminal_bench/exp/smoke \
+  --k 5
+```
+
+产物：
+
+```
+campaign/
+├── run_manifest.json          # 记录来源 run root、合并方式、短 k 的任务
+├── disclosure_ledger.json     # 与 run_tb 同一套 reason_code 分类
+└── submission/submissions/terminal-bench/2.1/ouroboros__<model>/
+    ├── metadata.yaml
+    └── job/
+        ├── agent_job_config.json      # 带 agents[].name（冒烟模式缺的那项）
+        └── <timestamp>/
+            ├── config.json  lock.json  job.log
+            ├── result.json            # 合并后全部 trial 的聚合
+            └── {task}__{hash}/        # 全部任务的全部 trial 平铺于此
+```
+
+**收集器修掉的三件事**（冒烟产物直接拿去提交是不合格的）：
+
+1. 冒烟用裸 `--agent-import-path`，job config 里 `agents[0].name = null`，官方 CI「no matching agent in job config」永远匹配不上 → 收集器生成命名 job config
+2. 每次调用各自一个 job 目录，89 个任务就是 89 个 job → 收集器合并成一个
+3. 冒烟不写 `metadata.yaml` 和 `disclosure_ledger.json` → 收集器补齐（复用 `run_tb.py` 自己的函数，口径不会漂）
+
+> ⚠️ **收集时必须 `source .env.terminal_bench.linux`**。`metadata.yaml` 声明的评审模型取自环境变量；不设就会写成代码里的**出厂默认值**，与实际运行的评审模型不符。收集器会在这种情况下打印警告。
+
+## ④ 校验
+
+```bash
+python devtools/benchmarks/terminal_bench/exp/verify_output.py \
+  --submission ~/bench_runs/terminal_bench/exp/campaign/submission \
+  --k 5
+```
+
+按官方规则逐项检查并**如实打印缺口**（阻塞项 exit≠0）：
+
+| 检查 | 级别 |
+|---|---|
+| slot 目录 / `metadata.yaml` | 阻塞 |
+| job config 命名了每个 agent，且含 `--agent-name` | 阻塞 |
+| 每任务 trial 数 ≥ k | 阻塞 |
+| 每个 trial 有 `result.json` | 阻塞 |
+| **每个 rewarded trial 有 ATIF trajectory** | 阻塞 |
+| `verifier/reward.txt` + `agent/instruction.txt` | 提示 |
+| `task_id.ref`（内容哈希） | 提示 |
+
+> ATIF trajectory 必须在**首次上传前**存在：README 记载重复上传会跳过已存在的 trial，而 trajectory PUT 失败会静默降级为仅归档，客户端无法修复。缺失用 `build_atif_trajectories.py --job-dir <job> --validate` 补齐。
+
+## 外部防线（为什么不会因网络/API 失败丢 trial）
+
+| 层 | 措施 |
+|---|---|
+| 宿主 | `preflight.sh` 闸门；`.env` 的代理 + fallback 链 + 重试 |
+| 容器内安装 | apt/pip 走清华镜像；**uv 引导带重试+镜像+完整性校验**；pip 缓存属主修正；uv/pip 缓存持久化到挂载目录 |
+| 容器内运行时 | 长度截断快速失败；模型永久排除防振荡；降级上下文裁剪；连接错误退避 30–120s |
+| 验证器 | 注入的 `test.sh` 复用已装 uv（不再从 GitHub 下载），缓存目录重定向到持久挂载 |
+| 跑后 | `triage_run.py` 只把 infra 失败写进补跑清单 |
+
+关于 uv：agent 侧安装现在以 `uv venv --seed` + `uv pip install` 为主路径，pip + 清华镜像是保留的回退。这条路径替换掉了原来那个裸的 `curl https://astral.sh/uv/install.sh | sh`——它硬编码 GitHub URL，CN 网络下空烧约 300 秒，且残缺下载会留下能通过 `command -v` 却一跑就段错误的 uv。
+
+## 失败分三类，只有一类可以补跑
+
+| 类别 | 含义 | 处理 |
+|---|---|---|
+| **infra** | 没得到公平机会（API 挂、传输断连、安装炸、未打分） | ✅ 补跑 |
+| **截断** | 有公平机会但预算用完（`AgentTimeout`、`deadline_local`） | ❌ 保留为失败 |
+| **真错** | 有公平机会、有预算、答错 | ❌ 保留为失败 |
+
+**把「截断」当外部问题补跑，是让 pass@k 虚高最典型的方式。** 超时是数据集规则的一部分。
+
+```bash
+python devtools/benchmarks/terminal_bench/exp/triage_run.py \
+  --run-root ~/bench_runs/terminal_bench/exp/smoke/regex-log \
+  --infra-out devtools/benchmarks/terminal_bench/exp/remaining_tasks.txt
+```
+
+## 文件说明
+
+| 文件 | 作用 |
+|---|---|
+| `preflight.sh` | 跑前闸门 |
+| `collect_smoke.py` | 逐任务产物 → 官方排版 |
+| `verify_output.py` | 对照官方规则校验并报告缺口 |
+| `triage_run.py` | infra / 截断 / 真错三方分类 |
+| `all_tasks.txt` | 全部 89 个任务（数据集顺序） |
+| `failed_tasks.txt` | v0 的 35 个失败任务 |
+| `remaining_tasks.txt` | 待补跑的 infra 任务（triage 生成） |
+| `task_metadata.md` | 89 个任务的官方限制（超时/资源/难度） |
+| `capabilities/` | 从历史运行输出恢复的能力规则与任务注释 |
+
+## ⚠️ 三个必须知道的坑
+
+**1. 容器创建的数据目录属 root，删不掉。**
+每次 trial 的 `agent/ouroboros-data/` 由容器内 root 写入，`rm -rf` 会 `Permission denied`。清理旧运行需要 `sudo rm -rf <run-root>`。别把它写进 `&&` 链——失败会静默跳过后续步骤。
+
+**2. `disclosure_ledger.json` 是累计的。**
+`run_tb.py` 用 `rglob` 扫描整个 job 目录下所有 `result.json`。往同一个 run-root 重复跑会让账本越滚越大（`test_cap_rules` 就是这样变成「manifest 写 1 任务、账本 99 trial / 21 任务」）。**每个 arm / 每轮用干净的 run root。**
+
+**3. `run_tb.py` 没有断点续跑。**
+每次调用都是一次全新 job。中断后重跑请用新的 run root 或 `--tasks-file` 缩小范围。
+
+## 榜单资格
+
+有效提交要求：`k >= 5`、`timeout_multiplier == 1.0`、setup/build 超时乘数为 null、无 resource override、agent-web 关闭。
+
+`$TERMINAL_BENCH_LOCAL_GUARD` 里的 setup/build 乘数会让运行**永久失去提交资格**，只能当本地实验。官方认可的替代是**预构建镜像**（`force_build: false`），而不是放大超时。
+
+多 job 提交是官方支持的：任务覆盖与「每任务 ≥5 trial」在**全部 job 上合并评估**，这也是官方认可的「补跑失败/infra trial」的方式。但注意官方规则同时写着 **errored trial 计为 reward 0，永不排除**。

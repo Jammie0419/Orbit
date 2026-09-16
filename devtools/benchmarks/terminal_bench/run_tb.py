@@ -41,6 +41,7 @@ from devtools.benchmarks.common.run_roots import (
     safe_benchmark_id,
     safe_join_under,
 )
+from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mounts
 from devtools.benchmarks.terminal_bench.run_harbor_smoke import AGENT_IMPORT
 from ouroboros.config import SETTINGS_DEFAULTS
 
@@ -545,18 +546,17 @@ def harbor_command(config: HarborCommandConfig) -> list[str]:
         str(config.jobs_dir),
         "--yes",
     ]
-    # Optional host pip wheel cache (opt-in via OBO_TB_PIP_CACHE): bind-mount a durable host dir at
-    # /opt/ouro-pip-cache in every task container so the per-trial Ouroboros pip install hits cached
-    # wheels instead of the network (offline-fast, resilient to mirror drops). Read-write + shared is
-    # safe: pip keys wheels by py/platform tag and writes via atomic rename of identical content, so
-    # heterogeneous task images and n-concurrent trials populate/reuse one cache without conflict.
-    # This is NOT a leaderboard-config field (it's a deploy mount, like --n-concurrent), so it does
-    # not affect static_validation. Unset → no --mounts emitted → behavior unchanged.
-    pip_cache = os.environ.get("OBO_TB_PIP_CACHE", "").strip()
-    if pip_cache:
-        cache_dir = ensure_outside_repo(pathlib.Path(pip_cache), repo_root_from_devtools())
-        mounts = [{"type": "bind", "source": str(cache_dir), "target": "/opt/ouro-pip-cache"}]
-        cmd.extend(["--mounts", json.dumps(mounts)])
+    # Optional host caches (opt-in via OBO_TB_PIP_CACHE / OBO_TB_APT_CACHE / OBO_TB_HF_CACHE):
+    # bind-mount durable host dirs into every task container so the per-trial Ouroboros install
+    # hits cached wheels/debs instead of the network (offline-fast, resilient to mirror drops).
+    # Read-write + shared is safe: pip keys wheels by py/platform tag and writes via atomic rename
+    # of identical content, so heterogeneous task images and n-concurrent trials populate/reuse one
+    # cache without conflict. These are deploy mounts (like --n-concurrent), not leaderboard-config
+    # fields, so static validation ignores them. Unset everywhere -> no --mounts emitted.
+    # The mount SET is shared with run_harbor_smoke via cache_mounts.py so the two runners cannot
+    # drift to a weaker set — the smoke runner previously mounted nothing, which made every trial
+    # re-download ~200MB inside harbor's 360s agent-setup budget.
+    extend_with_cache_mounts(cmd, repo_root_from_devtools())
     # Execution backend (harbor's own `-e/--env`). Harbor's default is `docker`, i.e. the LOCAL
     # docker daemon, and Frontier-Bench was verified to run there end-to-end on harbor 0.18.0 (the
     # oracle solution of a real FB task scored reward 1.0 through the separate-environment
@@ -852,6 +852,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--low-k-floor", type=int, default=5, help="k below this is graded local/low-confidence (debug_only at k=1) in report_grade (default 5).")
     parser.add_argument("--n-concurrent", type=int, default=1)
     parser.add_argument("--task", action="append", default=[], help="optional include-task-name; repeatable")
+    parser.add_argument(
+        "--tasks-file",
+        default="",
+        help="read include-task-names from a file (one per line, '#' comments and blanks ignored); "
+             "merged with any --task flags",
+    )
     parser.add_argument("--review-enforcement", default="blocking", choices=["blocking", "advisory"],
                         help="in-task review enforcement mode forwarded to the container (default blocking)")
     parser.add_argument("--safety-mode", default="light", choices=["full", "light", "off"],
@@ -961,6 +967,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
+    # Merge --tasks-file into the repeated --task list before anything reads it
+    # (admission records the union as requested_task_ids, harbor gets it as
+    # repeated --include-task-name). Blank lines and '#' comments are ignored so
+    # the list files can carry notes.
+    if args.tasks_file:
+        tasks_path = pathlib.Path(args.tasks_file).expanduser()
+        if not tasks_path.is_file():
+            parser.error(f"--tasks-file not found: {tasks_path}")
+        from_file: list[str] = []
+        for raw in tasks_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            from_file.append(line)
+        if not from_file:
+            parser.error(f"--tasks-file is empty (no task names): {tasks_path}")
+        args.task = list(args.task or []) + from_file
+
     fixed_actor: dict[str, Any] = {}
     if args.all_model:
         fixed_actor = apply_all_model(
@@ -1007,9 +1031,12 @@ def main(argv: list[str] | None = None) -> int:
     # Second belt on the SAME object: the components are already validated, and the assembled path
     # is re-confined under the validated root. `--model` is only slash-flattened, not id-checked
     # (real slots carry `.` and provider suffixes like `:free`, which a strict id rule would reject),
-    # so this join is what keeps a hostile model string inside the tree on every OS.
+    # so this join is what keeps a hostile model string inside the tree on every OS. Colons are
+    # flattened too: the existing submission tree names slots `ouroboros__openai-compatible__mimo-v2.5`,
+    # and a raw `::` survives on Linux but breaks as a URL path segment and on Windows.
     job_dir = safe_join_under(
-        submission_root, "submissions", *subtree, f"ouroboros__{args.model.replace('/', '-')}", "job",
+        submission_root, "submissions", *subtree,
+        f"ouroboros__{args.model.replace('/', '-').replace(':', '_')}", "job",
     )
     metadata_path = job_dir.parent / "metadata.yaml"
     # Backend + harness provenance, resolved ONCE and shared by the manifest and the ledger so the

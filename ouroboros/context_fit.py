@@ -437,9 +437,9 @@ def build_context_fit_plan(
     # duplicating its output reservation.  The lazy import avoids coupling the
     # data-only fit representation to the high-level model loop.
     from ouroboros.capability_evidence import is_known
-    from ouroboros.loop_llm_call import MAIN_LOOP_MAX_TOKENS
+    from ouroboros.loop_llm_call import main_loop_max_tokens
 
-    output_reserve = MAIN_LOOP_MAX_TOKENS
+    output_reserve = main_loop_max_tokens()
     # One observation store: witnesses are written at settlement into the
     # canonical host root, so a child task's own drive must not be consulted.
     ratio = _route_calibration_ratio(

@@ -362,8 +362,9 @@ def test_finish_reason_null_deadline_stop_emits_durable_event(tmp_path, monkeypa
 
 
 def test_transient_retry_budget_env_override(tmp_path, monkeypatch):
-    """OUROBOROS_TRANSIENT_RETRY_MAX tunes the transient budget but never
-    drops below the caller's default budget."""
+    """OUROBOROS_TRANSIENT_RETRY_MAX tunes the transient budget: an explicit
+    override wins verbatim (TB sets 1 to fast-fail), and with no override the
+    configured floor (6) applies so misconfiguration cannot reduce resilience."""
     from ouroboros.loop_llm_call import transient_retry_max
 
     monkeypatch.delenv("OUROBOROS_TRANSIENT_RETRY_MAX", raising=False)
@@ -371,7 +372,7 @@ def test_transient_retry_budget_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_TRANSIENT_RETRY_MAX", "8")
     assert transient_retry_max(3) == 8
     monkeypatch.setenv("OUROBOROS_TRANSIENT_RETRY_MAX", "1")
-    assert transient_retry_max(3) == 3  # floored at caller default
+    assert transient_retry_max(3) == 1  # explicit override wins verbatim
     monkeypatch.setenv("OUROBOROS_TRANSIENT_RETRY_MAX", "junk")
     assert transient_retry_max(3) == 6
 

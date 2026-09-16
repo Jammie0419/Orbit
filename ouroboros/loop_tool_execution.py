@@ -1199,12 +1199,38 @@ def process_tool_results(
     """Append tool results to messages/trace and return error count."""
     error_count = 0
 
+    # TB optimization: Track consecutive errors for debug loop detection
+    ctx = getattr(tools, "_ctx", None) if tools is not None else None
+    if ctx is not None:
+        consecutive_errors = getattr(ctx, "_consecutive_tool_errors", 0)
+    else:
+        consecutive_errors = 0
+
     for exec_result in results:
         fn_name = exec_result["fn_name"]
         is_error = exec_result["is_error"]
 
         if is_error:
             error_count += 1
+            consecutive_errors += 1
+        else:
+            consecutive_errors = 0
+
+        # TB optimization: Inject debug loop warning after 3 consecutive errors
+        if consecutive_errors == 3 and ctx is not None:
+            warning_msg = (
+                "\n\n⚠️ DEBUG LOOP WARNING: You've had 3 consecutive tool failures. "
+                "Consider: (1) Trying a different approach, (2) Checking if required files exist, "
+                "(3) Simplifying your implementation. Don't spend more than 30% of budget on debugging."
+            )
+            # We'll inject this as a system message in the next round
+            if not hasattr(ctx, "_pending_debug_warnings"):
+                ctx._pending_debug_warnings = []
+            ctx._pending_debug_warnings.append(warning_msg)
+            log.info("Debug loop detected: 3 consecutive tool errors")
+
+        if ctx is not None:
+            ctx._consecutive_tool_errors = consecutive_errors
 
         truncated_result = _truncate_tool_result(
             exec_result["result"],

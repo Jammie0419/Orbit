@@ -23,6 +23,13 @@ from typing import Dict, Tuple
 _cooldown: Dict[Tuple[str, bool], float] = {}
 _lock = threading.Lock()
 
+# Task-scoped permanent exclusion: once a model has been tried and failed during the
+# current task, it stays excluded for the rest of the task. This prevents oscillation
+# where the main loop cycles between models every cooldown-expiry window (e.g.
+# mimo-v2.5 → hy3 → mimo-v2.5 → hy3 every ~120s). Keyed by (model, use_local).
+_excluded: Dict[int, set] = {}  # task_id_hash → set of (model, use_local)
+_excluded_lock = threading.Lock()
+
 
 def cooldown_enabled() -> bool:
     """Default-on; only an explicit falsey value disables it."""
@@ -78,3 +85,39 @@ def is_cooling_down(model: str, use_local: bool = False) -> bool:
 def reset_for_tests() -> None:
     with _lock:
         _cooldown.clear()
+    with _excluded_lock:
+        _excluded.clear()
+
+
+def mark_permanently_excluded(task_id_hash: int, model: str, use_local: bool = False) -> None:
+    """Permanently exclude a model for the rest of the current task. Once a model has
+    failed and we've moved on, don't cycle back to it — that causes oscillation where
+    the main loop flips between two models every cooldown window, wasting tokens on
+    cold cache."""
+    if not model:
+        return
+    key = (str(model), bool(use_local))
+    with _excluded_lock:
+        bucket = _excluded.setdefault(task_id_hash, set())
+        bucket.add(key)
+
+
+def is_permanently_excluded(task_id_hash: int, model: str, use_local: bool = False) -> bool:
+    """True if this model was already tried and failed during the current task."""
+    key = (str(model), bool(use_local))
+    with _excluded_lock:
+        bucket = _excluded.get(task_id_hash)
+        if bucket is None:
+            return False
+        return key in bucket
+
+
+def clear_task_exclusions(task_id_hash: int) -> None:
+    """Clean up exclusion state when a task finishes."""
+    with _excluded_lock:
+        _excluded.pop(task_id_hash, None)
+
+
+def _task_id_hash(task_id: str) -> int:
+    """Stable hash for a task ID string."""
+    return hash(str(task_id or "")) & 0x7FFFFFFF

@@ -31,6 +31,7 @@ from devtools.benchmarks.common.run_roots import (
     repo_root_from_devtools,
     run_root as default_run_root,
 )
+from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mounts
 
 
 AGENT_IMPORT = "devtools.benchmarks.terminal_bench.harbor_installed_agent:OuroborosTerminalBenchAgent"
@@ -49,6 +50,7 @@ def harbor_command(
     agent_setup_timeout_multiplier: float = 1.0,
     environment_build_timeout_multiplier: float = 1.0,
     light_model: str = "",
+    force_build: bool = False,
     options: dict[str, Any] | None = None,
 ) -> list[str]:
     opts = dict(options or {})
@@ -98,7 +100,16 @@ def harbor_command(
     )
     for task_name in task_names:
         cmd.extend(["--include-task-name", task_name])
-    if bool(opts.get("execute")):
+    # Host cache mounts (pip/uv wheels, apt debs + index, HF artifacts). Smoke mode used to
+    # emit NONE, so every trial re-downloaded ~200MB of large wheels inside harbor's 360s
+    # agent-setup budget and routinely died with AgentSetupTimeoutError. The mount set is
+    # shared with run_tb via cache_mounts.py so the two cannot drift.
+    extend_with_cache_mounts(cmd, repo_root_from_devtools())
+    # Cached images are the default: a task image that is already present is reused,
+    # which is both faster and closer to the accepted-submission shape (8/10 accepted
+    # submissions pin environment.force_build=false). Rebuilding is opt-in because it
+    # turns a ~15 minute trial into a multi-minute image build every single time.
+    if force_build:
         cmd.append("--force-build")
     return cmd
 
@@ -177,6 +188,11 @@ def main() -> int:
         help="record and proceed with an unclean/unidentifiable seed checkout instead of refusing",
     )
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--force-build",
+        action="store_true",
+        help="rebuild the task image even when a cached one exists (default: reuse cache)",
+    )
     args = parser.parse_args()
 
     repo_root = repo_root_from_devtools()
@@ -211,6 +227,7 @@ def main() -> int:
         agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
         environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
         light_model=actor_slots["OUROBOROS_MODEL_LIGHT"],
+        force_build=bool(args.force_build),
         options={"execute": args.execute, "host_settings_path": str(settings_path)},
     )
     ledger_output = (

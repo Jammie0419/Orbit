@@ -35,6 +35,26 @@ log = logging.getLogger(__name__)
 
 MAIN_LOOP_MAX_TOKENS = 65_536
 
+# Per-task output ceiling for the main solve loop. Tunable via
+# OUROBOROS_MAIN_LOOP_MAX_TOKENS so terminal-bench-style time-budgeted tasks can
+# force small per-round outputs — a single long generation that hits the window
+# edge is discarded wholesale (finish_reason=null) and can burn the whole task
+# budget in one call. Env override wins; clamped to a sane floor so
+# misconfiguration cannot starve the loop into empty responses.
+_MAIN_LOOP_MAX_TOKENS_FLOOR = 4_096
+_MAIN_LOOP_MAX_TOKENS_DEFAULT = MAIN_LOOP_MAX_TOKENS
+
+
+def main_loop_max_tokens() -> int:
+    raw = os.environ.get("OUROBOROS_MAIN_LOOP_MAX_TOKENS", "").strip()
+    try:
+        value = int(raw) if raw else None
+    except ValueError:
+        value = None
+    if value is None:
+        return _MAIN_LOOP_MAX_TOKENS_DEFAULT
+    return max(int(_MAIN_LOOP_MAX_TOKENS_FLOOR), value)
+
 # Retrieval transparency (v6.78.0, owner Q20/Q22): native provider web search happens
 # INSIDE the solve model's own request, so `usage["web_search_sources"]` /
 # `usage["server_tool_use"]` are the only host-attested evidence that the answer was
@@ -147,8 +167,10 @@ def transient_retry_max(default_retries: int) -> int:
     """Attempt budget for transient provider failure classes.
 
     Tunable via OUROBOROS_TRANSIENT_RETRY_MAX (SSOT default in
-    config.SETTINGS_DEFAULTS); never below the caller's default budget so
-    misconfiguration cannot reduce existing resilience.
+    config.SETTINGS_DEFAULTS). An explicit env override wins VERBATIM — TB
+    sets it to 1 to fast-fail on transient glitches — while with no override
+    the budget stays at the configured floor so misconfiguration cannot reduce
+    existing resilience.
     """
     try:
         from ouroboros.config import SETTINGS_DEFAULTS
@@ -157,10 +179,14 @@ def transient_retry_max(default_retries: int) -> int:
         default_value = _TRANSIENT_RETRY_DEFAULT
     raw = os.environ.get("OUROBOROS_TRANSIENT_RETRY_MAX", "").strip()
     try:
-        value = int(raw) if raw else default_value
+        value = int(raw) if raw else None
     except ValueError:
-        value = default_value
-    return max(int(default_retries), value)
+        value = None
+    if value is not None:
+        return value  # explicit env override wins (allows reduction for TB latency)
+    # No explicit override: keep the configured floor so transient glitches
+    # (finish_reason=null) still get the resilience budget they are designed for.
+    return max(int(default_retries), default_value)
 
 
 def _empty_response_log_msg(usage: Dict[str, Any], is_provider_glitch: bool, accumulated_usage: Dict[str, Any]) -> str:
@@ -173,18 +199,26 @@ def _empty_response_log_msg(usage: Dict[str, Any], is_provider_glitch: bool, acc
     if isinstance(provider_error, dict):
         accumulated_usage["_last_llm_error_kind"] = str(provider_error.get("kind") or "provider_transient")
         return f"Provider returned a body error (code={provider_error.get('code')}): {provider_error.get('message')}"
+    if accumulated_usage.get("_last_llm_error_kind") == "length_truncated":
+        return "Provider output hit max_tokens with finish_reason=null (treated as length-truncated, not transient glitch)"
     if is_provider_glitch:
         return "Provider returned incomplete response (finish_reason=null)"
     return "LLM returned empty response (no content, no tool_calls)"
 
 
-def _classify_empty_response(usage: Dict[str, Any], msg: Dict[str, Any]) -> Tuple[str, bool, bool]:
+def _classify_empty_response(usage: Dict[str, Any], msg: Dict[str, Any], max_tokens: Optional[int] = None) -> Tuple[str, bool, bool]:
     """Classify an empty / no-tool-call response → (event_type, is_provider_glitch,
     permanent_body_error). A TYPED non-transient body error (WA1 kind
     ``provider_error``: auth / quota / bad_request) is PERMANENT — a same-model
     reroute already failed in the transport, so retrying here only burns the
     transient budget. Only rate_limit / provider_transient body errors and a bare
-    ``finish_reason=null`` glitch are retryable."""
+    ``finish_reason=null`` glitch are retryable.
+
+    Special case: when ``finish_reason is None`` AND ``completion_tokens >= max_tokens``,
+    the provider likely cut the response at the length cap but failed to set
+    ``finish_reason=length`` (observed with opencode.ai gateway on mimo/longcat).
+    Classify as ``length_truncated`` — not a transient glitch — so the caller won't
+    burn budget on same-model retry or cross-model fallback."""
     finish_reason = msg.get("finish_reason") or msg.get("stop_reason")
     if str(finish_reason or "").strip().lower() in _STRUCTURED_CONTEXT_OVERFLOW_CODES:
         return "remote_context_overflow", False, True
@@ -195,6 +229,16 @@ def _classify_empty_response(usage: Dict[str, Any], msg: Dict[str, Any]) -> Tupl
     ):
         return "remote_context_overflow", False, True
     is_provider_glitch = finish_reason is None
+    # Detect length-truncation disguised as finish_reason=null: when the provider
+    # generated tokens up to the max_tokens cap, a null finish_reason is most
+    # likely a gateway bug (observed on opencode.ai for mimo/longcat when comp
+    # hits 4096/16384/65536). Don't classify as transient glitch — that path
+    # would burn transient_budget on same-model retry AND trigger the F1
+    # fallback chain, wasting minutes with no chance of success.
+    completion_tokens = int(usage.get("completion_tokens") or 0) if isinstance(usage, dict) else 0
+    if is_provider_glitch and max_tokens and completion_tokens >= int(max_tokens):
+        # Treat as permanent (no retry, no fallback): same request will hit the same cap.
+        return "length_truncated", False, True
     body_kind = str((body_err or {}).get("kind") or "") if isinstance(body_err, dict) else ""
     permanent_body_error = bool(body_err) and body_kind not in ("rate_limit", "provider_transient")
     if permanent_body_error:
@@ -221,13 +265,17 @@ def _record_and_emit_empty_response(
     *, usage, msg, accumulated_usage, event_queue, drive_logs, task_id, execution_id,
     round_id, llm_call_id, round_idx, attempt, model, task_type, content, tool_calls,
     request_ref, response_ref, transient_budget, context_fit_event_fields,
+    max_tokens: Optional[int] = None,
 ) -> tuple:
     """Classify an empty / no-tool-call response, log + emit its events, and stamp
     accumulated_usage (last error / execution_status / reason_code / F1 cooldown kind).
     Returns ``(event_type, is_provider_glitch, permanent_body_error)`` for the caller's
     retry decision. Extracted from call_llm_with_retry to keep that loop readable."""
     finish_reason = msg.get("finish_reason") or msg.get("stop_reason")
-    event_type, is_provider_glitch, permanent_body_error = _classify_empty_response(usage, msg)
+    event_type, is_provider_glitch, permanent_body_error = _classify_empty_response(usage, msg, max_tokens=max_tokens)
+    if event_type == "length_truncated":
+        # Stamp kind BEFORE _empty_response_log_msg reads it.
+        accumulated_usage["_last_llm_error_kind"] = "length_truncated"
     log_msg = _empty_response_log_msg(usage, is_provider_glitch, accumulated_usage)
     log.warning("%s, attempt %d/%d", log_msg, attempt + 1, transient_budget)
     _emit_empty_response_events(
@@ -245,6 +293,10 @@ def _record_and_emit_empty_response(
         accumulated_usage["execution_status"] = "infra_failed"
         accumulated_usage["reason_code"] = "llm_api_error"
         accumulated_usage["_last_llm_error_kind"] = "context_overflow"
+    elif event_type == "length_truncated":
+        # Fast-fail: no retry, no fallback. Keep the kind stamped above.
+        accumulated_usage["execution_status"] = "failed"
+        accumulated_usage["reason_code"] = event_type
     else:
         accumulated_usage["execution_status"] = (
             "infra_failed" if (is_provider_glitch and not permanent_body_error) else "failed"
@@ -285,10 +337,20 @@ def _retry_backoff_sec(
     against its own ``reset_at``, never through the 60s-capped exponential, so a
     six-hour window never becomes sixty one-minute retries. ``_sleep_within_deadline``
     then honestly refuses when the task deadline cannot absorb that wait.
+
+    TB optimization: Connection errors (APIConnectionError) get longer backoff since
+    they often indicate temporary API outages that need more time to recover.
     """
     retry_after = accumulated_usage.get("_last_llm_retry_after_sec")
     if error_kind == SUBSCRIPTION_WINDOW_EXHAUSTED and retry_after is not None:
         return max(0.0, float(retry_after))
+
+    # TB optimization: longer backoff for connection errors
+    last_error = str(accumulated_usage.get("_last_llm_error") or "").lower()
+    if "connection" in last_error or "apiconnectionerror" in last_error:
+        # Connection errors often need 30-60s to recover
+        return min(30.0 * (attempt + 1), 120.0)
+
     return min(2.0 ** attempt * 4, _TRANSIENT_BACKOFF_CAP_SEC if is_transient else 30.0)
 
 
@@ -971,7 +1033,7 @@ def call_llm_with_retry(
                 "messages": send_messages,
                 "model": model,
                 "reasoning_effort": effort,
-                "max_tokens": MAIN_LOOP_MAX_TOKENS,
+                "max_tokens": main_loop_max_tokens(),
                 "use_local": use_local,
                 "allow_server_web_search": bool(allow_server_web_search),
                 "bypass_response_cache": response_cache_bypass_requested,
@@ -990,7 +1052,7 @@ def call_llm_with_retry(
                         "tools": tools or [],
                         "model": model,
                         "reasoning_effort": effort,
-                        "max_tokens": MAIN_LOOP_MAX_TOKENS,
+                        "max_tokens": main_loop_max_tokens(),
                         "use_local": bool(use_local),
                         "allow_server_web_search": bool(allow_server_web_search),
                         "response_cache_bypass_requested": response_cache_bypass_requested,
@@ -1090,6 +1152,7 @@ def call_llm_with_retry(
                     task_type=task_type, content=content, tool_calls=tool_calls,
                     request_ref=request_ref, response_ref=response_ref, transient_budget=transient_budget,
                     context_fit_event_fields=context_fit_event_fields,
+                    max_tokens=main_loop_max_tokens(),
                 )
                 if event_type == "provider_incomplete_response" and not usage.get("provider_error"):
                     response_cache_bypass_requested = True
@@ -1198,7 +1261,23 @@ def call_llm_with_retry(
             if attempt >= attempt_budget - 1:
                 break
             backoff = _retry_backoff_sec(accumulated_usage, error_kind, attempt, is_transient)
+
+            # TB optimization: Log retry attempts with more detail for debugging
+            if attempt > 0 or is_transient:
+                last_error_short = str(accumulated_usage.get("_last_llm_error") or "")[:100]
+                log.info(
+                    f"LLM retry attempt {attempt+1}/{attempt_budget} for {model}: "
+                    f"error_kind={error_kind}, backoff={backoff:.1f}s, error={last_error_short}"
+                )
+
             if not _sleep_within_deadline(backoff, deadline_ts):
+                # TB optimization: Before giving up completely, try one last longer wait
+                # for connection errors - they sometimes recover after 60-90s
+                last_error = str(accumulated_usage.get("_last_llm_error") or "").lower()
+                if ("connection" in last_error or "apiconnectionerror" in last_error) and attempt < 2:
+                    log.info(f"Connection error: attempting extended backoff (60s) before giving up")
+                    if _sleep_within_deadline(60.0, deadline_ts):
+                        continue  # Try one more time after the longer wait
                 _emit_retry_deadline_exhausted(
                     drive_logs, task_id=task_id, execution_id=execution_id,
                     round_id=round_id, round_idx=round_idx, attempt=attempt,
