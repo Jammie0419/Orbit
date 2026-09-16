@@ -39,7 +39,12 @@ def test_render_requires_flag_but_can_be_bypassed(monkeypatch):
 
 def test_render_is_empty_for_unannotated_task(monkeypatch):
     monkeypatch.setenv(ta.ENV_FLAG, "1")
-    assert ta.render_task_annotations("regex-log") == ""
+    # Derived, not hardcoded: this assertion named "regex-log" until that task gained an
+    # annotation, at which point the test inverted and failed. Any name absent from the
+    # table proves the same thing and cannot go stale the same way.
+    absent = next(n for n in (f"unannotated-{i}" for i in range(100)) if n not in ta.TASK_ANNOTATIONS)
+    assert ta.render_task_annotations(absent) == ""
+    assert ta.render_task_annotations(absent, require_flag=False) == ""
 
 
 def test_task_name_resolves_from_every_shape_it_arrives_in():
