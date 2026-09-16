@@ -76,11 +76,14 @@ else
   pass "no leftover containers"
 fi
 # Every task whose image is not cached locally has to come from the registry, and a
-# registry that is unreachable turns "first run of a task" into a failed trial.
-# /v2/ answering 401 is the NORMAL unauthenticated response; it proves reachability.
+# registry that is unreachable turns "first run of a task" into a failed trial rather
+# than a slow one. /v2/ ALWAYS answers 401 to an unauthenticated request -- it is the
+# auth challenge, not a failure: docker answers it by fetching an anonymous token and
+# retrying, which works for public images. A real problem is an empty reply (000).
 REG_CODE="$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://registry-1.docker.io/v2/ 2>/dev/null)"
 case "$REG_CODE" in
-  200|401) pass "image registry reachable (HTTP $REG_CODE)" ;;
+  401)     pass "image registry reachable (401 = the normal auth challenge, not an error)" ;;
+  200)     pass "image registry reachable (HTTP 200)" ;;
   000|"")  fail "image registry unreachable — uncached task images cannot be pulled" ;;
   *)       warn "image registry answered HTTP $REG_CODE (unexpected; pulls may fail)" ;;
 esac
