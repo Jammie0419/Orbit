@@ -58,7 +58,10 @@ python devtools/benchmarks/terminal_bench/exp/collect_smoke.py \
 
 ```
 campaign/
-├── run_manifest.json          # 记录来源 run root、合并方式、短 k 的任务
+├── assembly_manifest.json     # 记录来源 run root、合并方式、短 k 的任务
+│                              # 注意：**不是**经准入的 run_manifest（没有干净种子闸门/
+│                              # 源码溯源/凭证披露）——组装本身没有跑任何东西，
+│                              # 所以用独立 schema 名，避免被误读为一次真实运行
 ├── disclosure_ledger.json     # 与 run_tb 同一套 reason_code 分类
 └── submission/submissions/terminal-bench/2.1/ouroboros__<model>/
     ├── metadata.yaml

@@ -18,7 +18,7 @@ This tool assembles those per-task runs into the shape an accepted submission
 actually has:
 
     <out>/
-    ├── run_manifest.json                 (consolidated; lists the source runs)
+    ├── assembly_manifest.json            (what went into this tree; NOT an admitted run manifest)
     ├── disclosure_ledger.json            (consolidated; run_tb's own taxonomy)
     └── submission/submissions/terminal-bench/2.1/<agent>__<model>/
         ├── metadata.yaml
@@ -183,7 +183,7 @@ def build_job_result(trials: list[dict], *, eval_key: str, started: str, finishe
         bucket.sort()
     mean = sum(rewards_numeric) / len(rewards_numeric) if rewards_numeric else 0.0
     return {
-        "id": "",  # no single harbor job backs an assembled tree; see run_manifest.json
+        "id": "",  # no single harbor job backs an assembled tree; see assembly_manifest.json
         "started_at": started,
         "updated_at": finished,
         "finished_at": finished,
@@ -384,19 +384,32 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    # ---- consolidated manifest + disclosure ledger (run_tb's own ledger writer)
-    manifest = {
-        "schema": "ouroboros.benchmark.run_manifest.v1",
+    # ---- assembly record + disclosure ledger
+    # Deliberately NOT `ouroboros.benchmark.run_manifest.v1`, and deliberately not
+    # named run_manifest.json. That schema is produced by `admit_benchmark_run`, and
+    # its value comes from what admission PROVES: a clean-seed gate, repo provenance,
+    # argv, credential disclosure, harness identity. Assembling already-finished runs
+    # proves none of that, so reusing the name would hand a reader a document that
+    # looks admitted and is not. This record says what it is: which source runs went
+    # into this tree.
+    assembly = {
+        "schema": "ouroboros.benchmark.assembly_manifest.v1",
         "benchmark": "terminal_bench",
         "created_at_unix": _dt.datetime.now().timestamp(),
         "run_root": str(out),
+        "assembled_by": "devtools/benchmarks/terminal_bench/exp/collect_smoke.py",
+        "provenance_note": (
+            "Assembled from completed per-task runs. This is NOT an admitted run "
+            "manifest: it carries no clean-seed gate, no source provenance and no "
+            "credential disclosure, because the assembly itself performed no run. "
+            "Per-run provenance lives in each source root's own run_manifest.json."
+        ),
         "requested_task_ids": sorted(by_task),
         "requested_count": len(by_task),
         "dataset": args.dataset,
         "model_slots": {"OUROBOROS_MODEL": args.model, "OUROBOROS_MODEL_LIGHT": args.light_model or args.model},
-        "extra": {
+        "assembly": {
             "outcome": "assembled",
-            "assembled_by": "devtools/benchmarks/terminal_bench/exp/collect_smoke.py",
             "assembly_kind": "per-task smoke runs merged into one submission-shaped job",
             "source_run_roots": [str(r) for r in roots],
             "source_job_dirs": [str(p) for p in sorted(source_jobs)],
@@ -406,10 +419,16 @@ def main() -> int:
             "job_timestamp": stamp,
             "merged_job_dir": str(merged_job_ts),
             "trials_short_of_k": shortfalls,
-            "job_level_result_json": "computed aggregate over the merged trials (no single harbor job backs this tree)",
+            "job_level_result_json": (
+                "computed aggregate over the merged trials; no single harbor job backs this tree"
+            ),
+            "job_level_config_json": (
+                "copied from one source job, so it describes that job's single task rather "
+                "than every task in this tree"
+            ),
         },
     }
-    (out / "run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    (out / "assembly_manifest.json").write_text(json.dumps(assembly, indent=2) + "\n", encoding="utf-8")
 
     ledger = write_disclosure_ledger(
         jobs_dir=job_dir,
@@ -444,7 +463,7 @@ def main() -> int:
     print()
     print(f"job config  -> {config_path}")
     print(f"metadata    -> {metadata_path}")
-    print(f"manifest    -> {out / 'run_manifest.json'}")
+    print(f"assembly    -> {out / 'assembly_manifest.json'}")
     print(f"ledger      -> {out / 'disclosure_ledger.json'}")
     if isinstance(ledger, dict):
         print(f"ledger says : n_trials={ledger.get('n_trials')} n_tasks={ledger.get('n_tasks')} "
