@@ -85,7 +85,24 @@ def model_slug(model: str) -> str:
 
 
 def _is_trial_dir(path: pathlib.Path) -> bool:
-    return path.is_dir() and (path / "result.json").is_file() and "__" in path.name
+    """A trial dir holds a result.json describing ONE trial.
+
+    Naming alone is not enough to tell a trial dir from harbor's job dir: the job
+    timestamp dir is also `<date>__<time>` (so it contains `__`) and also carries a
+    job-level result.json. Discriminate on CONTENT instead -- a trial result.json has
+    `task_name` / `verifier_result`, a job-level one has `stats.evals`. Same rule
+    run_tb.py's ledger walker uses.
+    """
+    if not path.is_dir():
+        return False
+    result = path / "result.json"
+    if not result.is_file():
+        return False
+    try:
+        data = json.loads(result.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and ("task_name" in data or "verifier_result" in data)
 
 
 def discover_trial_dirs(roots: list[pathlib.Path]) -> list[pathlib.Path]:
