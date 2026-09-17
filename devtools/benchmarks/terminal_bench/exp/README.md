@@ -139,6 +139,40 @@ python devtools/benchmarks/terminal_bench/exp/verify_output.py \
    约 40% 的任务被静默留在默认源。实测 `apt-get update`：默认源 **121 秒** vs 清华 **3 秒**，
    而 agent 安装总预算只有 360 秒。现已同时处理 deb822 `debian.sources` 和 legacy `sources.list`。
 
+## 预拉任务镜像（缺镜像时别用 "throwaway trial"）
+
+`preflight.sh` 的 `[6/6] task images` 会列出未缓存的镜像。它建议"每个镜像跑一个 throwaway trial"，那是 ~15 分钟/个 × N；**直接从镜像源拉更快**：
+
+```bash
+# 1) 从本地 task.toml 取准确镜像名（tag 不统一：多数 20251031，少数 20260403 / 20260430）
+find ~/.cache/harbor/tasks/packages/terminal-bench -name task.toml \
+  | xargs grep -h '^docker_image' | sed 's/.*"\(.*\)"/\1/' | sort -u > /tmp/imgs.txt
+
+# 2) 逐个从可用镜像源拉，再打回 docker.io 的原始名字（多个源兜底）
+while read -r img; do
+  docker image inspect "$img" >/dev/null 2>&1 && continue
+  for host in docker.1panel.live docker.1ms.run dockerproxy.net; do
+    timeout 400 docker pull "$host/$img" >/dev/null 2>&1 \
+      && docker tag "$host/$img" "$img" && break
+  done
+done < /tmp/imgs.txt
+```
+
+实测（2026-09-17，23 个缺失镜像）哪个源能用：
+
+| 镜像源 | 命中率 |
+|---|---|
+| `docker.m.daocloud.io`（daemon.json 里配的那个） | ❌ **不缓存 alexgshaw 系列**，明确拒绝（"not in the allowlist"） |
+| `docker.1ms.run` | ~1/3 |
+| **`docker.1panel.live`** | **最高**（兜住 20/23） |
+| `dockerproxy.net` | 兜底可用 |
+| `docker.xuanyuan.me` / `hub.rat.dev` / `dockerpull.cn` / `docker.hlmirror.com` / `docker.imgdb.de` | ❌ 实测均不可用 |
+
+拉完把镜像源别名标签清掉，`docker images` 才干净（不占额外空间，只是多个名字）：
+`docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^(docker\.1panel\.live|docker\.1ms\.run|dockerproxy\.net)/' | xargs -r -n1 docker rmi`
+
+> 直连 `docker.io` 在 CN 网络下会超时（dockerd 没配代理）。若要改用代理：给 dockerd 配 `HTTP_PROXY`/`HTTPS_PROXY` 后重启 docker——**会杀掉运行中的容器**，务必等空闲时做。
+
 ## 缓存与镜像：实际覆盖到哪些阶段
 
 三处缓存目录（`OBO_TB_PIP_CACHE` / `OBO_TB_APT_CACHE` / `OBO_TB_HF_CACHE`）通过 bind mount
@@ -213,6 +247,11 @@ JOB=<job 目录>
 sudo rm -rf "$JOB/<trial 目录名>"
 # ② 续：原地重跑那个 slot（其余 trial 一个不动；~15 分钟；需要 API/桥接在线）
 harbor job resume -p "$JOB"
+```
+```bash
+ls "$JOB"/                                          # 新后缀 trial 出现、该删的目录消失
+cat "$JOB"/<新 trial>/verifier/reward.txt           # 应与 verifier/ctrf.json 一致（不能 reward=1 但 ctrf 记录失败）
+python -m json.tool "$JOB"/result.json | head -40   # job 级统计已重算（trial 列表 / reward 分布 / mean / pass@k）
 ```
 
 **先花 30 秒确认它真的该补**（"没跑过"才补，"跑满了"不补）：
@@ -290,6 +329,16 @@ harbor job resume -p "$JOB" -f AgentSetupTimeoutError    # 可重复传多个类
 1. **先 `sudo rm -rf` 整个 trial 目录，再 resume**（提前删掉，harbor 就无需自己动手）；
 2. **不要只删 `result.json`**——那会让 harbor 去删整个目录（含 root 文件）而撞权限；
 3. 要保留的、已完成的 trial 目录**不要**动。
+
+### ⚠️ run_root 的 wrapper 侧车不会更新
+
+`harbor job resume` 是 harbor CLI 直接干活，wrapper（`run_harbor_smoke.py`）**不参与**。所以 `run_root` 下日期目录之外的 3 个 sidecar 文件在 resume 后**不会刷新**：
+
+- `harbor_command.json` —— 还是最初的 `harbor run` 命令，不含 `harbor job resume` 的痕迹；
+- `run_manifest.json` —— `extra.outcome` / `extra.n_concurrent` / `source.head` 等都停留在初始 launch 时的快照；
+- `result_index.jsonl` —— **仍列出 resume 前删掉的旧 trial 名**（例如 `NosBdej`），不会提到新 trial。
+
+**真源是 job 目录里的 `<日期>/result.json`** —— harbor 在 resume 后自动按当前真实 trial 重算 reward/mean/pass@k。`collect_smoke.py` / `verify_output.py` 都扫 trial 目录、不依赖 sidecar，所以下游流程无影响。自己读 `result_index.jsonl` 做理解时会误导，忽略即可。
 
 ### 中断/失败后的残留清理（容器 / 进程 / 半成品）
 
