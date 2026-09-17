@@ -75,7 +75,7 @@
 
 | 任务 | 难度 | Agent | Verifier | 内存 | CPU | pass@1 | pass@5 | Time |
 |---|---|---|---|---|---|---|---|---|
-| cobol-modernization | easy | 15m | 15m | 2GB | 1 | | | |
+| cobol-modernization | easy | 15m | 15m | 2GB | 1 | 1.000 | 1.000 | exp/pass@1/cobol-modernization/2026-09-17__22-52-57 |
 | fix-git | easy | 15m | 15m | 2GB | 1 | | | |
 | prove-plus-comm | easy | 15m | 15m | 2GB | 1 | | | |
 | build-pmars | medium | 15m | 15m | 2GB | 1 | | | |
