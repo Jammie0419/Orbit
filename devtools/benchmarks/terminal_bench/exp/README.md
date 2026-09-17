@@ -10,6 +10,8 @@ preflight.sh     run_harbor_smoke.py     collect_smoke.py     verify_output.py
 ```
 
 > 跑到一半要下线、或某些 trial 因外部原因没拿到公平机会？**不用重跑整个任务**——`harbor job resume` 在原 job 目录上原地续跑，见「⑤ 续跑」。
+>
+> 📄 操作手册（失败归档到 `failed@1/` + 原地续跑，含实操示例与坑清单）：[`resume_and_failed1.md`](resume_and_failed1.md)。
 
 ## ① 跑前预检
 
@@ -32,7 +34,7 @@ python devtools/benchmarks/terminal_bench/run_harbor_smoke.py \
   --task terminal-bench/regex-log \
   --model "$TERMINAL_BENCH_MODEL" \
   --k 5 \
-  --run-root ~/bench_runs/terminal_bench/exp/smoke/regex-log \
+  --run-root ~/bench_runs/terminal_bench/exp/pass@1/regex-log \
   --allow-dirty-seed \
   --execute
 ```
