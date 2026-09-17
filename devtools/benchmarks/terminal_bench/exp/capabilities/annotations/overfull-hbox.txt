@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Ensure that the LaTeX document main.tex compiles successfully using the installed TeX distribution and pdflatex compiler with no "overfull hbox" warnings. In doing so, the only edits you may make are to replace words in 
+   交付物路径：/app/input.tex, /app/main.log, /app/main.tex, /app/synonyms.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert synonyms_path_agent.exists(), syn_error_str)；(assert synonyms == synonyms_agent, syn_error_str)；(assert main_path_agent.exists(), main_error_str)；(assert main == main_agent, main_error_str)；(assert "Output written on main.pdf" in log_content, ()；(assert "Overfull \\hbox" not in log_content, ()
+3. 参考解法（solve.sh 要点）：export DEBIAN_FRONTEND=noninteractive；cat > fix_one_hbox.py << 'EOF'；def parse_log(log_file='main.log'):

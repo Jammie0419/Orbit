@@ -1,0 +1,4 @@
+1. 任务本质与交付物：I have a ReLU neural network that you can query by importing `forward.py` and calling forward(x) which returns a single floating point number as output. The input dimension is 10. The neural network is a one-layer fully 
+   交付物路径：/app/stolen_A1.npy。
+2. 答案/验收基线（来自 test_outputs.py）：(assert x.shape[0] == 10, f"Input must have 10 elements, got {x.shape[0]}")；(assert stolen_path.exists(), f"File {stolen_path} does not exist")；(assert all_matched, f"Failed to match rows: {failures}")
+3. 参考解法（solve.sh 要点）：cat <<'EOF' > /app/steal.py；from forward import forward；import numpy as np

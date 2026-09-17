@@ -1,0 +1,4 @@
+1. 任务本质与交付物：A secret was accidentally committed to this repository in /app and then removed by rewriting history. Please 1. recover the secret and write it to a /app/secret.txt file. 2. clean up the secret in that repo to make sure 
+   交付物路径：/app/repo, /app/secret.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert flag_path.exists(), "secret.txt was not created")；(assert text == "secret[lost_and_found_in_git]", f"Flag value is incorrect: {text}")；(assert result.returncode == 0, f"Git log command failed: {result.stderr}")；(assert not result.stdout.strip(), ()；(assert "chore: init e665d1a2-04a7-4e61-b523-e897e231d9cc" in commit_messages, ()；(assert result.returncode == 0, f"Git fsck command failed: {result.stderr}")
+3. 参考解法（solve.sh 要点）：dangling_commits=$(git fsck --lost-found | grep "dangling commit" | awk '{print $3}')；> /app/secret.txt；for commit in $dangling_commits; do

@@ -6,3 +6,8 @@
 6. 峰值位置参考：石墨烯的 G 峰在 ~1580 cm⁻¹，2D 峰在 ~2670-2700 cm⁻¹。拟合时应关注这些范围附近的信号。
 7. 拟合策略：使用洛伦兹函数拟合，裁剪窗口（G: 1500-1700，2D: 2500-2900）后 curve_fit。G 峰半高宽（gamma）约 5-15 cm⁻¹，2D 峰半高宽约 15-30 cm⁻¹。如果拟合不收敛，尝试调整初始参数或使用更宽/更窄的拟合窗口。
 8. 常见陷阱：1) 数据格式用逗号作小数点，需替换为点号；2) 不要做过度可视化（图表不是交付物）；3) 峰值拟合失败时接受近似值，不要无限调试；4) 如果数据范围异常（如 >10000），优先考虑数据需要转换而非直接拟合；5) 不要在 '532nm/632.8nm 激光'、'x 单位是 Å'、'x/10' 等解释之间反复横跳——先做锚点验证排除假设，再动手拟合。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/results.json。
+  验收要点：assert result_path.exists(), f"File {result_path} does not exist"；assert x0_correct and gamma_correct and A_correct and offset_correct, (
+  参考解法：cat graphene.dat；python --version；cat > /app/convert.py << 'EOL'；with open("graphene.dat") as f:；lines = f.readlines()；new_lines = []；for line in lines:；line = line.strip().replace(",", ".").replace("\t", ",")；new_lines.append(line)；with open("graphene_format.

@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Install the original BVLC Caffe deep learning framework (version 1.0.0) and train a convolutional neural network to classify CIFAR-10 images. Clone Caffe to /app/caffe and build for only CPU execution, training for exact
+   交付物路径：/app/caffe。
+2. 答案/验收基线（来自 test_outputs.py）：(assert False, ()；(assert result.returncode == 0, f"Caffe version command failed: {result.stderr}")；(assert "1.0.0" in version_output, ()；(assert model_path.exists(), f"File {model_path} does not exist")；(assert model_size > 100000, ()；(assert len(header) > 50, "Model file appears to be empty or truncated")
+3. 参考解法（solve.sh 要点）：ln -sf /usr/include/opencv4/opencv2 /usr/include/opencv2；ln -sf /usr/include/hdf5/serial/* /usr/include/；ln -sf /usr/lib/aarch64-linux-gnu/libhdf5_serial_hl.so.100.1.7 /usr/lib/aarch64-linux-gnu/libhdf5_hl.so

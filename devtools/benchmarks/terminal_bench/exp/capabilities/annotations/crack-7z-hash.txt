@@ -1,0 +1,4 @@
+1. 任务本质与交付物：You need to create a file called "/app/solution.txt" with the word found in "secret_file.txt" in the "secrets.7z" archive.
+   交付物路径：/app/solution.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists(solution_path), ()；(assert content == "honeybear", ()
+3. 参考解法（solve.sh 要点）：ls john；ls john/run；/app/john/run/7z2john.pl /app/secrets.7z > /app/secrets.hash

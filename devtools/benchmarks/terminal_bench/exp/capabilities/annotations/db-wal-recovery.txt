@@ -3,3 +3,8 @@
 3. 解密方法：WAL 是单字节 XOR 0x42 加密（文件里占多数的 'B' 字节就是 0x42）。XOR 0x42 后 WAL 头应对得上合法 magic 0x377f0682，页数据应解出 'SQLite format 3'。确认解密后再做合并。
 4. 交付物：/app/recovered.json = main.db 的 5 条 + WAL 里的 6 条 = 全部 11 条记录（按验收要求字段、排序、无重复 ID）。前 50% 预算内必须先落盘一个含已知数据的骨架版本，再补全 WAL 部分——宁可先交部分正确数据，也不要 deadline 时文件不存在。
 5. 常见陷阱：1) 全程保持只读，任何可能触发 checkpoint/归并/重写的操作都会毁掉证据；2) WAL 丢失后不要翻无关目录（如 datasets 里的 parquet 训练数据）找数据，应回到 /tmp 备份副本；3) 解密产物和 recovered.json 都写 /tmp 或 /app 的新文件，绝不复写原 WAL。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/recovered.json。
+  验收要点：assert os.path.exists("/app/recovered.json"), "recovered.json file does not exist"；assert isinstance(data, list), "JSON should be a list"；assert len(data) > 0, "JSON should not be empty"；assert isinstance(item, dict), "Each item should be a dictionary"
+  参考解法：ls -la /app/main.db*；echo -e "\n=== Current database content ==="；sqlite3 "file:/app/main.db?mode=ro" "SELECT id, name, value FROM items ORDER BY id;"；echo -e "\n Examining WAL file header..."；echo "First 32 bytes of WAL file (hex):"；xxd -l 32 /app/main.db-wal

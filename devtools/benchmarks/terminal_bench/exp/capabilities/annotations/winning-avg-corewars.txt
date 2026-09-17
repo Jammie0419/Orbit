@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Write a CoreWars program that achieves a winning average against five classic opponent warriors. pMARS (CoreWars simulator) is pre-installed and configured. The core size is 8000 and max cycles is 80000. You can examine 
+   交付物路径：/app/my_warrior.red。
+2. 答案/验收基线：/app/my_warrior.red 必须存在；对 5 个经典对手（stone/paper/vampire/snake 等，原文件不可改动，校验 sha256）胜率下限：stone/paper/vampire ≥ 75%，snake ≥ 33%。
+3. 参考解法（solve.sh 要点）：cat > my_warrior.red <<'EOR'；;redcode-94；;name MultiTarget

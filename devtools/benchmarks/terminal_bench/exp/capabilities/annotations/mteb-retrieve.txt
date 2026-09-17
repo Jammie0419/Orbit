@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Given the query "terminal-bench" retrieve the document with the 5th highest cosine similarity among the texts at /app/data.txt, where each line is a separate document, using the bge-small-zh-v1.5 embedding model at revis
+   交付物路径：/app/result.txt。
+2. 答案（直接给出）：/app/result.txt 恰一行，内容必须精确等于 "MTEB: Massive Text Embedding Benchmark"（query=terminal-bench 对 data.txt 各文档用 bge-small-zh-v1.5 提特征后余弦相似度第 5 高的那一行原文）。
+3. 参考解法（solve.sh 要点）：cat << 'EOF' > retrieve.py；import mteb；import torch

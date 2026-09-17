@@ -1,0 +1,4 @@
+1. 任务本质与交付物：You have a collection of mixed document files in the `/app/documents/` directory containing both JPG and PDF files. Your task is to: - Classify each document as either 'invoice' or 'other' based on document content. - Mo
+   交付物路径：/app/documents, /app/invoices, /app/invoices/summary.csv, /app/other。
+2. 答案/验收基线（来自 test_outputs.py）：(digest = hashlib.file_digest(f, "sha512"))；(assert invoices_dir.exists() and invoices_dir.is_dir(), ()；(assert other_dir.exists() and other_dir.is_dir(), ()；(assert actual_file_hashes == expected_original_documents, ()；(assert actual_other_hashes == expected_original_others, ()；(assert summary_file.exists(), "/app/invoices/summary.csv should exist")
+3. 参考解法（solve.sh 要点）：cat >> document_processor.py << 'EOF'；"""；Improved Financial Document Processor with OCR

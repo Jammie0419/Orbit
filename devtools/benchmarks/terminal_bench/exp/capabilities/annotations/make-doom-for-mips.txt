@@ -4,3 +4,8 @@
 4. 编译策略：用交叉编译器 -static 一次构建，优先砍掉用不到的 doomgeneric 平台变体（只留 doomgeneric_img.c 与核心渲染），对每个 missing symbol 看 vm.js 能否映射，映射不了才考虑最小桩；禁止逐个大文件手工改造成 do-while(0) 或空实现来骗过链接器，那会浪费大量轮次。每完成一步立即 gcc 编译 + node vm.js 冒烟，用 /tmp/frame.bmp 是否出现作进度标准。
 5. 常见陷阱：1) 不要 8 分钟只读源码不编译——交叉工具链可能没装，装（apt install gcc-mipsel-linux-gnu）也要算进前 20% 预算；2) 不要对 vm.js 做无法验证的大幅重写，先在 node vm.js 环境里最小复现一个 syscall 调用链再动；3) 帧相似度测试要求渲染逻辑正确，不是随便一帧 bitmap，必须在本地对照 doomgeneric_img.c 的写帧路径确认颜色/尺寸正确；4) 全程以「node vm.js 能跑出第一帧」为唯一中期里程碑，所有工作围绕它展开。
 6. 最小冒烟（最高优先级，定义 = 跑通 node vm.js，不是编译 MIPS ELF）：在动 doomgeneric 之前，必须先用 2 分钟跑通最小 MIPS 链路——关键纪律：**编译 MIPS ELF 不算最小冒烟，必须执行 `node vm.js` 看到输出/错误才算**。步骤：1) 写 /tmp/hello.c（`int main(){return 0;}`）；2) `mipsel-linux-gnu-gcc -static -o /tmp/hello_mips /tmp/hello.c`；3) **立即执行** `node vm.js /tmp/hello_mips` 并查看输出/错误（这一步必须做，禁止跳过、禁止继续写其他文件直到看到结果）；4) 链路通了才去碰 doomgeneric。真实失败（两次）：11:55 那次 agent 把 15 分钟全花在让 doomgeneric 完整编译通过，从未跑过一次 `node vm.js`；12:25 那次 agent 写了 hello.c 编译成 MIPS ELF，但**没有执行 `node vm.js /tmp/hello_mips`**，又回到造 27KB my_stdlib.c 的老模式——最小冒烟走了形式没走实质。记住：编译出 MIPS ELF 只是中间产物，跑通 `node vm.js` 才是验证链路。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/vm.js, /tmp/frame.bmp。
+  验收要点：while not frame_path.exists():；assert expected_text in stdout_content, error_msg；assert frame_path.exists(), f"File {frame_path} does not exist"；assert frame_path.stat().st_size > 0, f"File {frame_path} is empty"
+  参考解法：cat <<'QQEOF' > /tmp/mips.patch；commit 4da9b5d989cda19f1a07f045c73aac66bf0d6f97；Author: Nicholas Carlini <nicholas@carlini.com>；Date:   Sat May 24 13:22:38 2025 -0700；changes；diff --git a/.gitignore b/.gitignore；index 1aaf1a3..03345a9 100644；--- a/.gitignore；+

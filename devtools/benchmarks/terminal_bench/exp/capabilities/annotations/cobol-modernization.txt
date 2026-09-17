@@ -1,0 +1,4 @@
+1. 任务本质与交付物：You are given a COBOL program located at /app/src/program.cbl. This program reads input data from /app/src/INPUT.DAT and modifies one or more .DAT files located in the /app/data/ directory. The COBOL program is designed 
+   交付物路径：/app/data, /app/data/ACCOUNTS.DAT, /app/data/BOOKS.DAT, /app/data/TRANSACTIONS.DAT, /app/program.py, /app/src/INPUT.DAT。
+2. 答案/验收基线（来自 test_outputs.py）：(assert Path(file_path).exists(), f"Required file {file_path} does not exist")；(assert Path(file_path).exists(), f"Data file {file_path} does not exist")；(assert result.returncode == 0, "Command failed")；(assert (data_dir / "ACCOUNTS.DAT").read_text() == expected_accounts, ()；(assert (data_dir / "BOOKS.DAT").read_text() == expected_books, ()；(assert (data_dir / "TRANSACTIONS.DAT").read_text() == expected_transactions, ()
+3. 参考解法（solve.sh 要点）：cat program.cbl；cat data/ACCOUNTS.DAT；cat data/BOOKS.DAT

@@ -1,0 +1,4 @@
+1. 任务本质与交付物：I've put an image at /app/image.ppm that I rendered programmatically. Write a c program image.c that I can run and compile and will generate an image that's as close as possible to the image I put here. Specifically, I w
+   交付物路径：/app/image, /app/image.c, /app/image.ppm。
+2. 答案/验收基线（来自 test_outputs.py）：(assert image_c_path.exists(), f"File {image_c_path} does not exist")；(assert result.returncode == 0, f"Compilation failed: {result.stderr}")；(assert len(zlib.compress(open("/app/image.c").read().encode())) < 2100)；(assert '/app/' not in result.stderr and '/app/' not in result.stdout)；(assert run_result.returncode == 0, f"Program execution failed: {run_result.stderr}")；(assert output_path.exists(), "reconstructed.ppm was not generated")
+3. 参考解法（solve.sh 要点）：cat <<'EOF' > image.c；typedef struct{；float x,y,z;

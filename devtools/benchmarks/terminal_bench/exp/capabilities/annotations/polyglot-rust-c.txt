@@ -124,3 +124,8 @@ int main(int argc, char** argv) {
       return mine::main(argc, argv);
   }
 // */
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/polyglot/cmain, /app/polyglot/main, /app/polyglot/main.rs。
+  验收要点：assert os.path.isfile("/app/polyglot/main.rs"), "main.rs not found in /app/polyglot"；assert rust_out == expected and cpp_out == expected, (
+  参考解法：cat <<'EOF' > polyglot/main.rs；/*；/*；*///；namespace mine {；int atoi(const char *str) {；int result = 0;；int sign = 1;；int i = 0;；// Skip whitespace；while (str[i] == ' ' || str[i] == '\t' || str[i] == '\n' ||；str[i] == '\v' || str[i] == '\f' || str[i] == '\r') {

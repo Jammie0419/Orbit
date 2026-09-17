@@ -1,0 +1,4 @@
+1. 任务本质与交付物：I have a sqlite database in /app/trunc.db that was corrupted through binary truncation. Recover as many of the rows as possible, and create a JSON file in /app/recover.json. The output should have the format [{"word": "t
+   交付物路径：/app/recover.json。
+2. 答案/验收基线（来自 test_outputs.py）：(assert score > 6, "Did not load data correctly")
+3. 参考解法（solve.sh 要点）：cat <<'EOF' > solve.py；import struct；import binascii

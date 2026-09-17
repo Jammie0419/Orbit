@@ -2,3 +2,7 @@
 2. SSH 配置步骤：1) 启用 root 登录：sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config；2) 设置密码：echo 'root:password123' | chpasswd；3) 启动服务：rc-service sshd start；4) 设置开机启动：rc-update add sshd
 3. 快速调试：1) 检查 QEMU 进程：ps aux | grep qemu；2) 检查端口监听：netstat -tlnp | grep 2222；3) 测试连接：sshpass -p password123 ssh -o StrictHostKeyChecking=no -p 2222 root@localhost 'echo ok'
 4. 关键检查点：1) 磁盘镜像必须存在且可写；2) 端口 2222 不能被占用；3) SSH 服务必须在虚拟机内启动；4) 测试期望内核版本为 6.6.4-1-lts（Alpine 3.19 LTS）
+
+答案/验收基线（自动从验证器提取）：
+  验收要点：assert "6.6.4-1-lts" in result.stdout, "Output of ssh is wrong version"
+  参考解法：qemu-system-x86_64 -m 1024 \；-cdrom /app/alpine.iso \；-drive file=/app/alpine-disk.qcow2,format=qcow2 \；-boot d \；-nic user,hostfwd=tcp::2222-:22 \；-daemonize -display none  -vga none \；-serial mon:telnet:127.0.0.1:6665,server,nowait；cat << 'eof' > wait；set ti

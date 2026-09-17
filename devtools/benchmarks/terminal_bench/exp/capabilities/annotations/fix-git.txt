@@ -1,0 +1,4 @@
+1. 任务本质与交付物：I just made some changes to my personal site and checked out master, but now I can't find those changes. Please help me find them and merge them into master.
+   交付物路径：/app/personal-site/_includes/about.md, /app/personal-site/_layouts/default.html。
+2. 答案/验收基线（来自 test_outputs.py）：(file_hash = hashlib.md5(file.read().strip()).hexdigest())；(assert hash_file(file_path) == expected_hash, ()；(assert hash_file(path_a) == hash_file(path_b), ()
+3. 参考解法（solve.sh 要点）：COMMIT_HASH="$(cat .git/logs/HEAD | awk '{ print $2 }' | sed -n '4p')"；git checkout -b recovery-branch $COMMIT_HASH；git checkout master

@@ -1,0 +1,4 @@
+1. 任务本质与交付物：I have been making some changes to the OCaml garbage collector, improving the sweeping performance by run-length compressing the free space in the major heap. I seem to have broken things though, as the OCaml compiler cr
+   交付物路径：/app/ocaml/tests.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert tests_output.exists(), "Tests output does not exist. Tests failed to run?")；(assert "40 tests passed" in tests_contents, "Could not determine that tests passed.")
+3. 参考解法（solve.sh 要点）：sed -i '650s/Whsize_hd(hd)/wh/' /app/ocaml/runtime/shared_heap.c

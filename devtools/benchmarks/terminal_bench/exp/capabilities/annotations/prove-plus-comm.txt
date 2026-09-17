@@ -1,0 +1,3 @@
+1. 任务本质与交付物：Fix the incomplete proof of addition commutativity in the file plus_comm.v. The file contains a partial proof that needs to be completed. The theorem states that addition is commutative for natural numbers (forall n m : 
+2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists("plus_comm.v"), "The proof file plus_comm.v should exist")；(assert os.path.exists("plus_comm.vo"), ()；(assert "n + m = m + n" in content, ()；(assert "Proof." in content, "The file should contain a proof")；(assert "Qed." in content, "The proof should be completed with Qed")；(assert "admit" not in content, "The proof should not contain any admits")
+3. 参考解法（solve.sh 要点）：printf "Require Import Arith.；Theorem plus_comm : forall n m : nat,；n + m = m + n.

@@ -17,3 +17,9 @@
 7. 交付纪律：预算只有 900s，而单次卡住的调用实测能吃掉 450~955 秒。所以第 1 轮就把初版写进 /app/regex.txt；**此后每次改动都直接覆盖这个文件、然后立刻跑自测**（不要先在临时脚本里试好几轮再写盘——实测有 trial 在最后两轮已经找到更好的结构，但那版只存在于测试脚本里，被切断后盘上留的还是那个零匹配的旧版本）。开始前先 `cp /app/regex.txt /app/regex.best.txt` 留个回退点，新版本更差就复制回来。盘上没有文件时 assert regex_file.exists() 直接判 0。
 
 8. 不要为了构造正则去写 build_regex.py 之类的生成脚本：交付物就是一行文本，直接改 /app/regex.txt。实测有 trial 把后半程花在写生成器和测试脚本上，regex.txt 从第 1 轮之后再没更新过。
+
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/regex.txt。
+  验收要点：assert regex_file.exists(), f"Regex file {regex_file} does not exist"；assert matches == expected_dates, f"Expected {expected_dates}, but got {matches}"
+  参考解法：cat << 'EOF' > /app/regex.txt；(?=.*(?:^|[^0-9A-Za-z])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?=$|[^0-9A-Za-z])).*(?:^|[^0-9A-Za-z])(\d{4}-(?:(?:01|03|05|07|08|10|12)-(?:0[1-9]|[12]\d|3[01])|(?:04|06|09|11)-(?:0[1-9]|[12]\d|30)|02-(?:0

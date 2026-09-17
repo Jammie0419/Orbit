@@ -1,0 +1,4 @@
+1. 任务本质与交付物：You are given the Open English Wordnet (OEWN) database in SQLite format, located at /app/oewn.sqlite. I implemented a sql query but it is not optimized. I have saved it in /app/my-sql-query.sql. Please make the query as 
+   交付物路径：/app/bench_summary.json, /app/my-sql-query.sql, /app/oewn.sqlite, /app/sol.sql。
+2. 答案/验收基线（来自 test_outputs.py）：(assert DB_PATH.exists(), f"DB not found at {DB_PATH}")；(assert GOLDEN_SQL_PATH.exists(), f"Golden SQL not found at {GOLDEN_SQL_PATH}")；(assert MY_SQL_QUERY_PATH.exists(), f"My SQL Query not found at {MY_SQL_QUERY_PATH}")；(assert golden_results == my_sql_results)；(hash = hashlib.sha256(DB_PATH.read_bytes()).hexdigest())；(assert hash == expected_hash, f"Database has been modified: {hash}")
+3. 参考解法（solve.sh 要点）：SELECT；w.wordid,；w.word,

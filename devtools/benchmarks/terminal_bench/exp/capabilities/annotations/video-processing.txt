@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Write a script, named jump_analyzer.py, and place it in `/app/jump_analyzer.py` . The script analyzes MP4 videos of hurdle jumpers and extracts performance metrics. In the video, there is a single jump recorded. You have
+   交付物路径：/app/example_video.mp4, /app/jump_analyzer.py, /app/output.toml。
+2. 答案/验收基线（来自 test_outputs.py）：(assert video_file.exists(), f"Video file {video_path} does not exist")；(assert result.returncode == 0, ()；(assert output_path.exists(), "output.toml was not created")；(assert False, f"Failed to parse output.toml: {e}")；(assert field in data, f"Missing required field: {field}")；(assert takeoff_range is not None and landing_range is not None, ()
+3. 参考解法（solve.sh 要点）：cat << 'EOF' > /app/jump_analyzer.py；"""；Simplified jump analyzer for hurdle videos.

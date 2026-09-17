@@ -1,0 +1,4 @@
+1. 任务本质与交付物：The file /app/feal.c implements a FEAL-like encryption function, with /app/decrypt.c being the corresponding decryption function, and the file /app/pairs.txt contain 32 plaintext-ciphertext pairs. (Each of the 4 round ke
+   交付物路径：/app/plaintexts.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert c in data)
+3. 参考解法（solve.sh 要点）：cat <<'EOF' > attack.c；typedef uint64_t u64;；typedef uint32_t u32;

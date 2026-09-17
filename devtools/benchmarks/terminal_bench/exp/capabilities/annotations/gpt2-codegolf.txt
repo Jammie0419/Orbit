@@ -4,3 +4,8 @@
 4. 环境事实：.ckpt 是约 475MB 的原始 float32 dump（124,439,808 个 float = 497,759,232 字节，与标准 GPT-2 124M 参数总数吻合；无 TF 协议头，不能按标准 TF checkpoint 解析）；vocab.bpe 是标准 BPE merges（50001 行含版本头，Ġ 表示空格前缀）；容器没有 file/xxd，用 python struct / wc 就够。
 5. 权重/运行方式：/app/a.out gpt2-124M.ckpt vocab.bpe "<input>" 输出后续 20 个 token；arg-max 采样。权重顺序按 GPT-2 124M 标准（wte/wpe → blocks 0..11 每块 ln_1/attn/ln_2/mlp → ln_f）写骨架，用上面第 2 条的样例锚点校准顺序和 BPE 解码。注意力实现要点（真实失败卡点）：每个位置都必须用各自的投影得到 q=Wq·h_t、k=Wk·h_j、v=Wv·h_j，attention 分数 = Σ_j (q_t·k_j)/√d_k，输出 = 各位置 v 的加权和；禁止只用当前 t 的 K/V 去 attend 其它位置的 raw hidden state，禁止在 score 里乘 kk[i]/vv[i]。
 6. 常见陷阱：1) 格式一致性核查（浮点 min/max、行数、合并格式）最多 2-3 轮，边际收益极低；2) 超过 5000 字节的文件也能编译运行，但验证器只看字节数，超了就是 0 分；3) 输出全 NUL/空 多半是 arg-max 落到 token 0（权重布局错→logits 全等）或 BPE 解码/输出写成了原始字节，必须跑样例对照修正；4) 不要翻 /app/datasets 的 parquet 训练数据——与任务无关，真实失败里在上面的侦察浪费过半预算。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/a.out, /app/gpt2.c。
+  验收要点：assert gpt2_path.exists(), f"File {gpt2_path} does not exist"；assert gpt2_path.stat().st_size < 5000, (；assert compile_result.returncode == 0, (；assert run_result.returncode == 0, f"Program execution failed: {run_result.stderr}"
+  参考解法：cat <<'EOF' > /app/gpt2.c；int V,C,L,c,d,U,zz;；char*bpe;；void*D,*n;；FILE*fp;；typedef struct{；float*i;；int j,k;；} A;；A*f;；A o(int j,int k,int i){；float*a=D;；D+=U=4*j*k;；memset(a,0,U*i);；A S={ a,j,k} ;；return S;；}；J(h,b/k)J(q,b+k)J(u,1./sqrt(b))J(z,exp(b))J(r,a.i

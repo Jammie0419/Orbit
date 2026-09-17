@@ -1,0 +1,4 @@
+1. 任务本质与交付物：# Modernize Legacy Scientific Computing Stack The legacy Python 2.7 climate analysis code at `/app/climate_analyzer/analyze_climate.py` is broken on Python 3. Create a modernized version that works with current Python. #
+   交付物路径：/app/analyze_climate_modern.py, /app/climate_analyzer/sample_data/climate_data.csv, /app/pyproject.toml, /app/requirements.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert script_path.exists(), "Required file /app/analyze_climate_modern.py not found")；(assert csv_file.exists(), "CSV data file should exist")；(assert result.returncode == 0, f"Script failed to run: {result.stderr}")；(assert "Station 101" in output, "Must output Station 101 results")；(assert "Station 102" in output, "Must output Station 102 results")；(assert "mean temperature" in output.lower(), "Must calculate mean temperature")
+3. 参考解法（solve.sh 要点）：cat > /app/requirements.txt << 'EOF'；numpy>=1.21.0；pandas>=1.3.0

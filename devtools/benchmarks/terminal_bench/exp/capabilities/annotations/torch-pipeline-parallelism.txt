@@ -2,3 +2,8 @@
 2. 环境注意（真实失败关键）：verifier 在自己独立的 uv venv 里跑（py3.13 + 新版 transformers/torch），agent 往系统 Python 装 torch/transformers 完全白费（PEP 668 externally-managed 拦截 + 两次下载超时，真实失败里 12.4 分钟全耗在这）。不要试图在容器里装 torch——直接读好任务说明写代码，交付物由 verifier 环境导入执行；需要本地验证 torch 行为时优先用已有 venv 或确认容器里是否有可用解释器。
 3. forward 调用兼容性（真实失败卡点）：不能裸调 LlamaDecoderLayer / self_attn 而不传 position_embeddings——新版 transformers 的 LlamaSelfAttention.forward 无条件执行 cos, sin = position_embeddings，不显式传入 model.rotary_emb(hidden_states, position_ids) 的 (cos,sin) 结果就会 TypeError: cannot unpack non-iterable NoneType，rank-0 第一层 forward 直接崩（真实失败：3 套 try/except 调用变体全部命中同一错误，world_size=1 和 2 全挂）。写层调用前先在脑子里过一遍目标 transformers 版本的 forward 签名，或写一个最小 Kiwi 调用验证。
 4. 时间与自测：900 秒里别把预算花在环境安装/侦察（真实失败：850s 只写了 1 次交付物、0 次自测、7 次工具调用 5 次报错）。前 30% 预算必须落盘第一版骨架（分层 + rank 分发 + AFAB 顺序），再用小模型（hidden 小、层数少）本地自测 verify 分层数与激活对得上；轮询过程中发现任何 forward 调用问题立即按目标版本修。deadline 前一分钟写未测试的大文件 = 必然 0 分。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/pipeline_parallel.py。
+  验收要点：assert pipeline_parallel_path.exists(), (；assert "register_forward_hook" not in code, (；assert "register_full_backward_hook" not in code, (；assert 0 < num_layers <= ((4 + config.num_hidden_layers) // world_size + 1), (
+  参考解法：cat << EOF > pipeline_parallel.py；import torch；import torch.distributed as dist；import torch.nn as nn；import torch.nn.functional as F；from typing import Optional；def p2p_comm(；*,；tensor_send_prev: Optional[torch.Tensor] = None,；tensor_recv_prev: Optional[torch

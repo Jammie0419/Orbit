@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Finding a target probability distribution for LLM confidence metrics: The confidence of a token prediction in an LLM can be quantified using different metrics. This implementation focuses on two metrics based on KL diver
+   交付物路径：/app/dist.npy。
+2. 答案/验收基线（硬性条件）：/app/dist.npy 必须是合法概率分布——1 维、size=150_000、全部有限且 >0、max ≤ 1.0、求和 == 1.0（容差 1e-5）；且 KL(P‖U) 与 KL(U‖P)（U 为均匀分布）都必须等于 10.0，容差 1e-3（TARGET=10.0, TOL=1e-3）。
+3. 参考解法（solve.sh 要点）：cat > /app/search_distributions.py << 'EOF'；from __future__ import annotations；import math

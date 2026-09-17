@@ -2,3 +2,8 @@
 2. forward() 签名：模型需要同时接收 src 和 tgt 两个参数，即 forward(src, tgt)。测试会调用 model(src_sequences, tgt_sequences)。
 3. TorchScript 导出：使用 torch.jit.script(model) 导出时，确保 forward() 方法签名正确包含两个参数 (src, tgt)，不要只保留一个参数。
 4. 常见错误：只从权重中恢复 encoder 部分，或导出时 forward() 只接收 src 参数，会导致测试报错 'forward() expected at most 2 argument(s) but received 3 argument(s)'。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/dataset.pt, /app/model.pt, /app/weights.pt。
+  验收要点：assert weights_path.exists(), f"File {weights_path} does not exist"；assert set(agent_weights.keys()) == set(true_weights.keys()), (；assert torch.allclose(agent_weights[key], true_weights[key]), (；assert hello_path.exists(), f"File {hello_path} does not exist"
+  参考解法：cat > inspect_weights.py << 'EOF'；import torch；state_dict = torch.load('weights.pt')；print("\n[State Dict Contents]")；for k, v in state_dict.items():；print(f"{k:<40} {tuple(v.shape)}")；EOF；python inspect_weights.py；cat > model.py << 'EOF'；import torch；import t

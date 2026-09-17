@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Set up a local service to run inference with a Hugging Face transformer model. 1. Download the "distilbert-base-uncased-finetuned-sst-2-english" sentiment analysis model from Hugging Face and save to the local directory 
+   交付物路径：/app/model_cache/sentiment_model。
+2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists(model_path), "Model directory not found")；(assert model is not None, "Model failed to load")；(assert tokenizer is not None, "Tokenizer failed to load")；(assert False, f"Failed to load model or tokenizer: {e}")；(assert False, "Could not connect to the Flask API on 0.0.0.0:5000")；(assert response.status_code == 200, ()
+3. 参考解法（solve.sh 要点）：python3 -c "；from transformers import AutoModelForSequenceClassification, AutoTokenizer；model_name = 'distilbert-base-uncased-finetuned-sst-2-english'

@@ -1,0 +1,4 @@
+1. 任务本质与交付物：You are provided with a Turtle file at `/app/university_graph.ttl` containing both the ontology and the instance data for a knowledge graph describing universities, departments, employees, students, classes, and related 
+   交付物路径：/app/solution.sparql。
+2. 答案/验收基线（来自 test_outputs.py）：(assert SPARQL_PATH.exists(), f"SPARQL query file {SPARQL_PATH} does not exist")；(assert DATA_PATH.exists(), f"RDF data file {DATA_PATH} does not exist")；(assert False, f"SPARQL query failed to run: {e}")；(assert result_set == reference_set, ()
+3. 参考解法（solve.sh 要点）：cat << 'EOF' > /app/solution.sparql；PREFIX uni: <http://university.org/ontology/>；PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>

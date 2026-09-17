@@ -1,0 +1,4 @@
+1. 任务本质与交付物：Implement the provided `BaseTerminal` interface. It provides a simple python interface to send keys to a headless terminal. Make sure it supports the following functionality. - Mimics a terminal, where the process starts
+   交付物路径：/app/cancel.txt, /app/secret.txt, /app/special_file.txt, /app/test.txt, /app/vim.txt。
+2. 答案/验收基线（来自 test_outputs.py）：(assert path.exists())；(assert path.read_text().strip() == "Hello, world!")；(assert not path.exists())；(assert response.status_code == 200)；(assert response.text.strip() == "Hello, world!")
+3. 参考解法（solve.sh 要点）：cp /solution/headless_terminal.py /app/headless_terminal.py

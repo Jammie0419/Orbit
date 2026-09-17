@@ -4,3 +4,8 @@
 4. 计算流程：加载数据集 → 加载 tokenizer → 遍历 science 领域样本 → 分词 → 统计 token 总数 → 写入 /app/answer.txt。
 5. Token 计数规则：当需要统计多个片段的总 token 数时对每个片段独立计数，再把各片段结果求和（Σ count(seg_i)）。如果必须拼接后计数，片段之间必须用换行符 
  分隔，且拼接后的结果应与分段求和一致。禁止把片段直接无缝拼接（不带任何分隔符）后一次性计数——tokenizer 的切分依赖上下文，无缝拼接会使边界处的字符跨边界合并成更少的 token，导致总数偏低（例如本例 79566 vs 正确值 79586，少算 20 个）。检：算出总数后，用分段求和交叉验证一次；若不一致，以分段求和为准，重新检查拼接方式。
+
+答案/验收基线（自动从验证器提取）：
+  交付物：/app/answer.txt。
+  验收要点：assert expected_output in actual_output, (
+  参考解法：cat << 'EOF' > count_tokens.py；import os；from datasets import load_dataset；from transformers import AutoTokenizer；tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", trust_remote_code=True)；ds = load_dataset("ryanmarten/OpenThoughts-1k-samp
