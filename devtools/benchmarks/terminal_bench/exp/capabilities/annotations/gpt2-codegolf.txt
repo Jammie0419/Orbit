@@ -9,3 +9,7 @@
   交付物：/app/a.out, /app/gpt2.c。
   验收要点：assert gpt2_path.exists(), f"File {gpt2_path} does not exist"；assert gpt2_path.stat().st_size < 5000, (；assert compile_result.returncode == 0, (；assert run_result.returncode == 0, f"Program execution failed: {run_result.stderr}"
   参考解法：cat <<'EOF' > /app/gpt2.c；int V,C,L,c,d,U,zz;；char*bpe;；void*D,*n;；FILE*fp;；typedef struct{；float*i;；int j,k;；} A;；A*f;；A o(int j,int k,int i){；float*a=D;；D+=U=4*j*k;；memset(a,0,U*i);；A S={ a,j,k} ;；return S;；}；J(h,b/k)J(q,b+k)J(u,1./sqrt(b))J(z,exp(b))J(r,a.i
+
+7. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：<5000
+· 参考解要点：int V,C,L,c,d,U,zz;

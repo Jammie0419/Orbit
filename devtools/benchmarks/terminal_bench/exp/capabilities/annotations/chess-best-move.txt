@@ -7,3 +7,6 @@
   交付物：/app/move.txt。
   验收要点：assert sorted(move) == sorted(["g2g4", "e2e4"]), "File is wrong"
   参考解法：apt install -y stockfish；pip3 install numpy==2.3.2 python-chess==1.2.0 --break-system-packages；cat <<'EOF' > solve.py；import numpy as np；from PIL import Image, ImageDraw, ImageFont；import chess；import chess.engine；import os；from pathlib import Path；def generat
+
+5. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

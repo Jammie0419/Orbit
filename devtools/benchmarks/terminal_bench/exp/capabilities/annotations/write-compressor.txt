@@ -8,3 +8,6 @@
   交付物：/app/data.comp, /app/data.txt, /app/decomp.c, /app/decomp2。
   验收要点：assert compressed_path.exists(), f"File {compressed_path} does not exist"；assert compressed_path.exists(), f"Compressed file {compressed_path} does not exist"；assert decompressor_path.exists(), (；assert original_path.exists(), f"Original file {original_path} does not exist"
   参考解法：cat <<'EOF' > main.rs；use std::collections::HashMap;；use std::f64;；use std::io::Read;；use std::convert::TryInto;；//；// Constants；//；const NN: usize = 1;；const OFF1: usize = 5;；const OFF2: usize = 2;；const LITSIZE: usize = 4;；// Context numbers (multiples of 10
+
+6. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：use std::collections::HashMap;；use std::f64;；use std::io::Read;

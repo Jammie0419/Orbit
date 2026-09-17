@@ -2,3 +2,7 @@
    交付物路径：/app/isos/win311.img, /tmp/qemu-monitor.sock。
 2. 答案/验收基线（来自 test_outputs.py）：(assert result.returncode == 0, ()；(assert cmdline_str, "Failed to get QEMU command line")；(assert netstat_result.returncode == 0, "Failed to check network services")；(assert Path(socket_path).is_socket(), ()；(assert ":5901" in netstat_output, "VNC service not listening on port 5901")；(assert ":80" in netstat_output, ()
 3. 参考解法（solve.sh 要点）：WIN311_IMG="/app/isos/win311.img"；QEMU_BIN="/usr/local/bin/qemu-system-i386"；detect_web_vnc_port() {
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 产物哈希（须匹配）：58fb76014dccf13ec048e894ca1e44773eee940ccbc71c97a2ab3d07285da553、63544885d8c574a55a7d01d122ac317e39202473c14b287c79caa68a72ea0740、81ab580d6fb9a22d727a58c77125deb4825186c6656f7368375ad429463d67e4
+· 参考解要点：WIN311_IMG="/app/isos/win311.img"；QEMU_BIN="/usr/local/bin/qemu-system-i386"；detect_web_vnc_port() {

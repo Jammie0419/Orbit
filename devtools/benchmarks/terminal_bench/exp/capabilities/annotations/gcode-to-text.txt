@@ -8,3 +8,7 @@
   交付物：/app/out.txt。
   验收要点：assert hello_path.exists(), f"File {hello_path} does not exist"；assert hello_path.read_text().strip() == "flag{gc0d3_iz_ch4LLenGiNg}", (
   参考解法：apt install -y tesseract-ocr libtesseract-dev；cat <<EOF > render.py；"""Plot 3D G-code line segments with Euler rotation"""；import pickle；import matplotlib.pyplot as plt；from mpl_toolkits.mplot3d import Axes3D；import numpy as np；import sys；def euler_rotation_ma
+
+6. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：flag{gc0d3_iz_ch4LLenGiNg}
+· 参考解要点："""Plot 3D G-code line segments with Euler rotation"""

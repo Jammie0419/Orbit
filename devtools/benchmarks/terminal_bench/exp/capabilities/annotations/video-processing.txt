@@ -2,3 +2,6 @@
    交付物路径：/app/example_video.mp4, /app/jump_analyzer.py, /app/output.toml。
 2. 答案/验收基线（来自 test_outputs.py）：(assert video_file.exists(), f"Video file {video_path} does not exist")；(assert result.returncode == 0, ()；(assert output_path.exists(), "output.toml was not created")；(assert False, f"Failed to parse output.toml: {e}")；(assert field in data, f"Missing required field: {field}")；(assert takeoff_range is not None and landing_range is not None, ()
 3. 参考解法（solve.sh 要点）：cat << 'EOF' > /app/jump_analyzer.py；"""；Simplified jump analyzer for hurdle videos.
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：Simplified jump analyzer for hurdle videos.；Extracts takeoff/landing frames, velocity, and landing timing.

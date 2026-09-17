@@ -6,3 +6,6 @@
 答案/验收基线（自动从验证器提取）：
   验收要点：assert "6.6.4-1-lts" in result.stdout, "Output of ssh is wrong version"
   参考解法：qemu-system-x86_64 -m 1024 \；-cdrom /app/alpine.iso \；-drive file=/app/alpine-disk.qcow2,format=qcow2 \；-boot d \；-nic user,hostfwd=tcp::2222-:22 \；-daemonize -display none  -vga none \；-serial mon:telnet:127.0.0.1:6665,server,nowait；cat << 'eof' > wait；set ti
+
+5. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

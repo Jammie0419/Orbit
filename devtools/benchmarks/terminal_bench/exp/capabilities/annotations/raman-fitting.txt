@@ -11,3 +11,7 @@
   交付物：/app/results.json。
   验收要点：assert result_path.exists(), f"File {result_path} does not exist"；assert x0_correct and gamma_correct and A_correct and offset_correct, (
   参考解法：cat graphene.dat；python --version；cat > /app/convert.py << 'EOL'；with open("graphene.dat") as f:；lines = f.readlines()；new_lines = []；for line in lines:；line = line.strip().replace(",", ".").replace("\t", ",")；new_lines.append(line)；with open("graphene_format.
+
+9. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：x0_expected = 1580.3；gamma_expected = 9.06；A_expected = 8382.69；offset_expected = 5561.03
+· 参考解要点：python --version

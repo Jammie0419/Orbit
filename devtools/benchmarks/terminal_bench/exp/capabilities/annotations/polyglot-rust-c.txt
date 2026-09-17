@@ -129,3 +129,6 @@ int main(int argc, char** argv) {
   交付物：/app/polyglot/cmain, /app/polyglot/main, /app/polyglot/main.rs。
   验收要点：assert os.path.isfile("/app/polyglot/main.rs"), "main.rs not found in /app/polyglot"；assert rust_out == expected and cpp_out == expected, (
   参考解法：cat <<'EOF' > polyglot/main.rs；/*；/*；*///；namespace mine {；int atoi(const char *str) {；int result = 0;；int sign = 1;；int i = 0;；// Skip whitespace；while (str[i] == ' ' || str[i] == '\t' || str[i] == '\n' ||；str[i] == '\v' || str[i] == '\f' || str[i] == '\r') {
+
+8. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

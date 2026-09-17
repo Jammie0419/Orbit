@@ -9,3 +9,6 @@
   交付物：/app/answer.txt。
   验收要点：assert expected_output in actual_output, (
   参考解法：cat << 'EOF' > count_tokens.py；import os；from datasets import load_dataset；from transformers import AutoTokenizer；tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", trust_remote_code=True)；ds = load_dataset("ryanmarten/OpenThoughts-1k-samp
+
+6. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：expected_output = "79586"

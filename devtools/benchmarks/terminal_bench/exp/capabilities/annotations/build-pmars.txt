@@ -1,3 +1,6 @@
 1. 任务本质与交付物：Build pMARS (http://www.koth.org/pmars/) from source with no X server. Since koth.org is unreliable, get the source from Debian packages instead. Extract the source to `/app/pmars-<version>/` and build from there without
 2. 答案/验收基线（来自 test_outputs.py）：(assert binary.exists(), "pmars not installed at /usr/local/bin/pmars")；(assert len(addresses1) >= 2, ()；(assert len(addresses2) >= 2, ()；(assert re.match(r"Results: \d+ \d+ \d+", battle_result), ()；(assert lib not in ldd_output, f"pmars links against X11 library: {lib}")；(assert source_dirs, ()
 3. 参考解法（solve.sh 要点）：build-essential \；libncurses-dev \；ca-certificates \
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

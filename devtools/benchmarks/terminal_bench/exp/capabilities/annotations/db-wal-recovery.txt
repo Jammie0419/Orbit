@@ -8,3 +8,7 @@
   交付物：/app/recovered.json。
   验收要点：assert os.path.exists("/app/recovered.json"), "recovered.json file does not exist"；assert isinstance(data, list), "JSON should be a list"；assert len(data) > 0, "JSON should not be empty"；assert isinstance(item, dict), "Each item should be a dictionary"
   参考解法：ls -la /app/main.db*；echo -e "\n=== Current database content ==="；sqlite3 "file:/app/main.db?mode=ro" "SELECT id, name, value FROM items ORDER BY id;"；echo -e "\n Examining WAL file header..."；echo "First 32 bytes of WAL file (hex):"；xxd -l 32 /app/main.db-wal
+
+6. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：cherry、date、elderberry、fig、grape、honeydew
+· 参考解要点：sqlite3 "file:/app/main.db?mode=ro" "SELECT id, name, value FROM items ORDER BY id;"；xxd -l 32 /app/main.db-wal；xxd -l 4 -p /app/main.db-wal

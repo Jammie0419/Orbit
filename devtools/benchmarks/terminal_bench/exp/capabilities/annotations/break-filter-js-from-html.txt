@@ -1,3 +1,6 @@
 1. 任务本质与交付物：There's a /app/filter.py script that attempts to remove JavaScript from HTML files to prevent XSS attacks. The /app/filter.py script takes an HTML file as a command-line argument and modifies it in-place. Usage: python /
    交付物路径：/app/out.html。
 2. 答案/验收基线（来自 test_outputs.py）：(assert out_path.exists(), f"File {out_path} does not exist")；(assert result.returncode == 0, f"Filter failed with error: {result.stderr}")；(assert alert_detected, ()
+
+3. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

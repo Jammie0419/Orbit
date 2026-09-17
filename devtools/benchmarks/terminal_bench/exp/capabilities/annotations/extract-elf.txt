@@ -2,3 +2,6 @@
    交付物路径：/app/extract.js, /app/new.c, /app/new.o, /app/out.json, /app/ref.js, /app/reference.json。
 2. 答案/验收基线（来自 test_outputs.py）：(assert extract_path.exists(), f"File {extract_path} does not exist")；(assert extract_path.is_file(), f"{extract_path} is not a file")；(assert result.returncode == 0, f"Compilation failed: {result.stderr}")；(assert result.returncode == 0, f"extract.js execution failed: {result.stderr}")；(assert result.returncode == 0, f"Reference script execution failed: {result.stderr}")；(assert out_json_path.exists(), f"File {out_json_path} does not exist")
 3. 参考解法（solve.sh 要点）：cat > extract.js << 'EOF'；const fs = require('fs');；// ELF Constants
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：const fs = require('fs');；// ELF Constants；const ELF_CLASS_32 = 1;

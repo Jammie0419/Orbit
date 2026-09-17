@@ -2,3 +2,6 @@
    交付物路径：/app/plaintexts.txt。
 2. 答案/验收基线（来自 test_outputs.py）：(assert c in data)
 3. 参考解法（solve.sh 要点）：cat <<'EOF' > attack.c；typedef uint64_t u64;；typedef uint32_t u32;
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：typedef uint64_t u64;；typedef uint32_t u32;；typedef uint8_t u8;

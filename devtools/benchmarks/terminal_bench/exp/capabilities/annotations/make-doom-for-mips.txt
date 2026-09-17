@@ -9,3 +9,7 @@
   交付物：/app/vm.js, /tmp/frame.bmp。
   验收要点：while not frame_path.exists():；assert expected_text in stdout_content, error_msg；assert frame_path.exists(), f"File {frame_path} does not exist"；assert frame_path.stat().st_size > 0, f"File {frame_path} is empty"
   参考解法：cat <<'QQEOF' > /tmp/mips.patch；commit 4da9b5d989cda19f1a07f045c73aac66bf0d6f97；Author: Nicholas Carlini <nicholas@carlini.com>；Date:   Sat May 24 13:22:38 2025 -0700；changes；diff --git a/.gitignore b/.gitignore；index 1aaf1a3..03345a9 100644；--- a/.gitignore；+
+
+7. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：expected_text = b"I_InitGraphics: DOOM screen size: w x h: 320 x 200"
+· 参考解要点：commit 4da9b5d989cda19f1a07f045c73aac66bf0d6f97；Author: Nicholas Carlini <nicholas@carlini.com>；Date:   Sat May 24 13:22:38 2025 -0700

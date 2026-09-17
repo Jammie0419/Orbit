@@ -2,3 +2,7 @@
    交付物路径：/app/dclm, /app/dclm/exp_data/datasets/tokenized/, /app/dclm/ray_processing/process.py, /app/dclm/ray_processing/ray_cluster.yaml。
 2. 答案/验收基线（来自 test_outputs.py）：(assert FAKE_AWS_ACCESS_KEY_ID.lower() not in contaminated_text.lower())；(assert FAKE_AWS_SECRET_ACCESS_KEY.lower() not in contaminated_text.lower())；(assert FAKE_GITHUB_TOKEN.lower() not in contaminated_text.lower())；(assert FAKE_HUGGINGFACE_TOKEN.lower() not in contaminated_text.lower())；(assert FAKE_HUGGINGFACE_TOKEN_2.lower() not in contaminated_text.lower())；(assert contaminated_text == decontaminated_text)
 3. 参考解法（solve.sh 要点）：grep -rE 'AKIA[0-9A-Z]{16}'；find . -type f -not -path "./.git/*" -exec grep -l "AKIA[0-9A-Z]\{16\}" {} + | xargs sed -i -E "s/AKIA[0-9A-Z]{16}/<your-aws-access-key-id>/g"；grep -rEi 'AWS_SECRET_ACCESS_KEY'
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 产物哈希（须匹配）：d6987af002b122fef54bc0be402062c76488a4d9
+· 参考解要点：grep -rE 'AKIA[0-9A-Z]{16}'；find . -type f -not -path "./.git/*" -exec grep -l "AKIA[0-9A-Z]\{16\}" {} + | xargs sed -i -E "s/AKIA[0-9A-Z]{16}/<your-aws-access-key-id>/g"；grep -rEi 'AWS_SECRET_ACCESS_KEY'

@@ -2,3 +2,7 @@
    交付物路径：/app/_defs_only.vim, /app/apply_macros.vim, /app/expected.csv, /app/input.csv, /app/vim_keystrokes.out, /app/vim_regs.out。
 2. 答案/验收基线（来自 test_outputs.py）：(h = hashlib.sha256())；(assert APPLY_SCRIPT.exists(), f"Missing macro script: {APPLY_SCRIPT}")；(assert all(tok in ("@a", "@b", "@c") for tok in other_normals), ()；(assert has_exit, "Missing :wq or :x")；(assert (setreg_a and setreg_b and setreg_c), "Must define all 3 macros")；(assert (exec_a and exec_b and exec_c), "Must execute all 3 macros")
 3. 参考解法（solve.sh 要点）：cat << 'EOF' > apply_macros.vim；" Macro a: Clean whitespace around commas and trim leading/trailing spaces；call setreg('a', ":s/\\s*,\\s*/,/g\<CR>:s/^\\s*\\(.*\\S\\)\\s*$/\\1/\<CR>j")
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：<200
+· 参考解要点：" Macro a: Clean whitespace around commas and trim leading/trailing spaces；call setreg('a', ":s/\\s*,\\s*/,/g\<CR>:s/^\\s*\\(.*\\S\\)\\s*$/\\1/\<CR>j")；" Macro b: Reverse field order (field1,field2,field3 -> field3,field2,field1)

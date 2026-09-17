@@ -2,3 +2,6 @@
    交付物路径：/tmp/data.txt。
 2. 答案/验收基线（来自 test_outputs.py）：(assert "6.6.4-1-lts" in data_file, f"File {data_file} does not have proper version")
 3. 参考解法（solve.sh 要点）：qemu-system-x86_64 -m 1024 \；-cdrom /app/alpine.iso \；-drive file=/app/alpine-disk.qcow2,format=qcow2 \
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：expect = """#!/usr/bin/expect -f

@@ -7,3 +7,6 @@
   交付物：/app/dataset.pt, /app/model.pt, /app/weights.pt。
   验收要点：assert weights_path.exists(), f"File {weights_path} does not exist"；assert set(agent_weights.keys()) == set(true_weights.keys()), (；assert torch.allclose(agent_weights[key], true_weights[key]), (；assert hello_path.exists(), f"File {hello_path} does not exist"
   参考解法：cat > inspect_weights.py << 'EOF'；import torch；state_dict = torch.load('weights.pt')；print("\n[State Dict Contents]")；for k, v in state_dict.items():；print(f"{k:<40} {tuple(v.shape)}")；EOF；python inspect_weights.py；cat > model.py << 'EOF'；import torch；import t
+
+5. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：state_dict = torch.load('weights.pt')；print("\n[State Dict Contents]")

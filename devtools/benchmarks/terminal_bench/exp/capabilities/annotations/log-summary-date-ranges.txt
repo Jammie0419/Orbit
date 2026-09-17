@@ -42,3 +42,6 @@
    d. 不要只检查文件存在（test_summary_file_exists 能过但不代表内容对）。
 
 6. 失败模式 1（genuine — 2026-09-17 EqMnFaq 实测）：agent 正常执行 7 轮、无异常，但 CSV 的 today/ERROR count=414（期望 370）。根因：聚合逻辑匹配范围偏宽。修复方向：严格按 JSON severity 精确匹配，不做模糊包含；落盘前 assert 每个 (period, severity) 的 count。
+
+7. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：LOG_DIR="/app/logs"；OUTPUT_FILE="/app/summary.csv"；CURRENT_DATE="2025-08-12"

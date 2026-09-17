@@ -7,3 +7,6 @@
   交付物：/app/run.py。
   验收要点：assert run_path.exists(), f"File {run_path} does not exist"；assert stdout.count("Task started.") == 2；assert stdout.count("Task finished.") == 2；assert stdout.count("Cleaned up.") == 2
   参考解法：cat > run.py << 'EOF'；import asyncio；from typing import Callable, Awaitable；async def task_with_semaphore(semaphore: asyncio.Semaphore, task: Callable[[], Awaitable[None]]) -> None:；async with semaphore:；await task()；async def run_tasks(；tasks: list[Callable[[
+
+5. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

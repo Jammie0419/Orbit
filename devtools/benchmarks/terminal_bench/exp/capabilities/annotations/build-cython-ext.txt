@@ -2,3 +2,6 @@
    交付物路径：/app/pyknotid。
 2. 答案/验收基线（来自 test_outputs.py）：("""Test that numpy===2.3.0 is maintained.""")；(assert version.parse(current_version) == version.parse("2.3.0"), ()；(f"Original numpy==2.3.0 was overridden by {current_version} ")；(assert path.exists(), f"{path} does not exist")；(assert path.is_dir(), f"{path} is not a directory")；(assert (path / ".git").exists(), f"{path} is not a git repository")
 3. 参考解法（solve.sh 要点）：git clone --depth 1 --branch 0.5.3 https://github.com/SPOCKnots/pyknotid.git /app/pyknotid；sed -i 's/from fractions import gcd/from math import gcd/' /app/pyknotid/pyknotid/make/torus.py；sed -i 's/n\.float)/n.float64)/g' /app/pyknotid/pyknotid/spacecurves/spacecurve.py
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：python setup.py build_ext --inplace

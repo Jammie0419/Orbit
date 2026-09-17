@@ -2,3 +2,6 @@
    交付物路径：/app/polyglot, /app/polyglot/cmain, /app/polyglot/main.py.c。
 2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists(main_file), ()；(assert python_out == expected and c_out == expected, ()
 3. 参考解法（solve.sh 要点）：cat <<'EOF' > polyglot/main.py.c；import sys；def fib_py(n: int) -> int:
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

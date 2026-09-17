@@ -2,3 +2,7 @@
    交付物路径：/app/model.bin。
 2. 答案/验收基线（硬性阈值）：accuracy ≥ 0.62；且 /app/model.bin 大小 < 150×1024×1024 字节（150MB）。
 3. 参考解法（solve.sh 要点）：git clone https://github.com/facebookresearch/fastText.git；python convert_data.py；fasttext supervised -input /app/data/train.txt -output model -wordNgrams 2 -dim 5
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：ACCURACY_THRESHOLD = 0.62；MAX_MODEL_SIZE = 150 * 1024 * 1024
+· 参考解要点：python convert_data.py；fasttext supervised -input /app/data/train.txt -output model -wordNgrams 2 -dim 5

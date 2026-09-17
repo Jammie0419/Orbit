@@ -2,3 +2,7 @@
    交付物路径：/app/documents, /app/invoices, /app/invoices/summary.csv, /app/other。
 2. 答案/验收基线（来自 test_outputs.py）：(digest = hashlib.file_digest(f, "sha512"))；(assert invoices_dir.exists() and invoices_dir.is_dir(), ()；(assert other_dir.exists() and other_dir.is_dir(), ()；(assert actual_file_hashes == expected_original_documents, ()；(assert actual_other_hashes == expected_original_others, ()；(assert summary_file.exists(), "/app/invoices/summary.csv should exist")
 3. 参考解法（solve.sh 要点）：cat >> document_processor.py << 'EOF'；"""；Improved Financial Document Processor with OCR
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：<0.01
+· 参考解要点：Improved Financial Document Processor with OCR；Based on analysis of actual OCR output patterns

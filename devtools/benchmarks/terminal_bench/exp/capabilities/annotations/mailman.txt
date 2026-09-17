@@ -1,3 +1,6 @@
 1. 任务本质与交付物：Spin up a mailing list server for our reading group: reading-group@local.edu using postfix and mailman3 (both are installed already). The mailing list has basic mailman3 functionalities like: - Mailing "reading-group-joi
 2. 答案/验收基线（来自 test_outputs.py）：(assert candidate_msgs, "No 'reading-group-confirm' messages found")；(assert os.path.exists(mbox_path), f"Mailbox not found: {mbox_path}")；(assert found, f"Direct email not found in {mbox_path}")；(assert mlist, "Mailing list does not exist")；(assert user_member is None, f"{user} is a member: {user_member=}")；(assert user_member, f"{user} is not a member: {user_member=}")
 3. 参考解法（solve.sh 要点）：MAIL_DOMAIN="local.edu"；MAILING_LIST="reading-group@local.edu"；useradd "admin" 2>/dev/null || echo "User admin already exists"
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：MAIL_DOMAIN="local.edu"；MAILING_LIST="reading-group@local.edu"；useradd "admin" 2>/dev/null || echo "User admin already exists"

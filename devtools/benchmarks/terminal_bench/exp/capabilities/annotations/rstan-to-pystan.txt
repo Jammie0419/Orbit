@@ -2,3 +2,6 @@
    交付物路径：/app/alpha_est.csv, /app/beta_est.csv, /app/rho_est.csv, /app/sigma_est.csv。
 2. 答案/验收基线（来自 test_outputs.py）：(assert False, ()；(assert False, "Timeout while checking R installation")；(assert False, "Timeout while checking RStan package")；(assert os.path.exists(file_path), f"Required output file not found: {file_path}")；(assert False, f"alpha estimation file not found: {file_path}")；(assert len(content) > 0, f"alpha estimation file is empty: {file_path}")
 3. 参考解法（solve.sh 要点）：export DEBIAN_FRONTEND=noninteractive；build-essential \；gfortran \
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

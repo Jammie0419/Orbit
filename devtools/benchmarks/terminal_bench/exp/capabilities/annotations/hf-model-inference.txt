@@ -2,3 +2,7 @@
    交付物路径：/app/model_cache/sentiment_model。
 2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists(model_path), "Model directory not found")；(assert model is not None, "Model failed to load")；(assert tokenizer is not None, "Tokenizer failed to load")；(assert False, f"Failed to load model or tokenizer: {e}")；(assert False, "Could not connect to the Flask API on 0.0.0.0:5000")；(assert response.status_code == 200, ()
 3. 参考解法（solve.sh 要点）：python3 -c "；from transformers import AutoModelForSequenceClassification, AutoTokenizer；model_name = 'distilbert-base-uncased-finetuned-sst-2-english'
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：positive、negative
+· 参考解要点：python3 -c "；model_name = 'distilbert-base-uncased-finetuned-sst-2-english'；model = AutoModelForSequenceClassification.from_pretrained(model_name)

@@ -2,3 +2,7 @@
    交付物路径：/app/convert_masks.py, /app/correct_output.csv, /app/mobile_sam.pt, /app/test_img.png, /app/test_metadata.csv, /app/test_output.csv。
 2. 答案/验收基线（来自 test_outputs.py）：(assert output_path.exists(), f"File {output_path} does not exist")；(assert out_df.shape == correct_df.shape, (f"Output df shape is incorrect, ")；(assert out_df.columns.equals(correct_df.columns), ()；(assert not is_rectangle_shapely()；(assert iou >= 0.5, f"IoU is too low: {iou}")；(assert intersection_area / poly1.area < 1e-3, ("Polygons ")
 3. 参考解法（solve.sh 要点）：rm -rf /var/lib/apt/lists/*；COMMIT_HASH='34bbbfdface3c18e5221aa7de6032d7220c6c6a1'；--extra-index-url https://download.pytorch.org/whl/cpu \
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：>=0.5
+· 参考解要点：COMMIT_HASH='34bbbfdface3c18e5221aa7de6032d7220c6c6a1'

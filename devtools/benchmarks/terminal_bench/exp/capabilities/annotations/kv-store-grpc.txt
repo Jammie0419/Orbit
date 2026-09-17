@@ -2,3 +2,6 @@
    交付物路径：/app/kv-store.proto, /app/kv_store_pb2.py, /app/kv_store_pb2_grpc.py, /app/server.py。
 2. 答案/验收基线（来自 test_outputs.py）：(assert proto_path.exists(), f"Proto file {proto_path} was not created by the agent")；(assert "service KVStore" in content, "Proto file must define KVStore service")；(assert "rpc GetVal" in content, "Proto file must define GetVal RPC")；(assert "rpc SetVal" in content, "Proto file must define SetVal RPC")；(assert "message GetValRequest" in content, "Proto file must define GetValRequest")；(assert "message SetValResponse" in content, "Proto file must define SetValResponse")
 3. 参考解法（solve.sh 要点）：cat > kv-store.proto << EOF；syntax = "proto3";；service KVStore {
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 参考解要点：syntax = "proto3";；service KVStore {；rpc GetVal (GetValRequest) returns (GetValResponse) {}

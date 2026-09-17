@@ -2,3 +2,7 @@
    交付物路径：/app/solution.txt。
 2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists(solution_path), ()；(assert content == "honeybear", ()
 3. 参考解法（solve.sh 要点）：ls john；ls john/run；/app/john/run/7z2john.pl /app/secrets.7z > /app/secrets.hash
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：honeybear
+· 参考解要点：/app/john/run/7z2john.pl /app/secrets.7z > /app/secrets.hash；/app/john/run/john /app/secrets.hash > /app/cracked.txt

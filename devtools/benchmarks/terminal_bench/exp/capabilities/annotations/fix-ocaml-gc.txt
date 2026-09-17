@@ -2,3 +2,6 @@
    交付物路径：/app/ocaml/tests.txt。
 2. 答案/验收基线（来自 test_outputs.py）：(assert tests_output.exists(), "Tests output does not exist. Tests failed to run?")；(assert "40 tests passed" in tests_contents, "Could not determine that tests passed.")
 3. 参考解法（solve.sh 要点）：sed -i '650s/Whsize_hd(hd)/wh/' /app/ocaml/runtime/shared_heap.c
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

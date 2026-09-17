@@ -12,3 +12,6 @@
   交付物：/app/parallel_linear.py。
   验收要点：assert parallel_linear_path.exists(), f"File {parallel_linear_path} does not exist"；assert torch.allclose(parallel_layer.weight, expected_weight_slice, atol=1e-5), (；assert torch.allclose(parallel_layer.bias, expected_bias_slice, atol=1e-5), (；assert torch.allclose(parallel_output, reference_output, atol=1e-5), (
   参考解法：cat << 'EOF' > parallel_linear.py；import math；import torch；import torch.nn.functional as F；import torch.distributed as dist；class ColumnParallelLinear(torch.nn.Module):；def __init__(self, in_features, out_features, bias, master_weight):；super().__init__()；self
+
+10. 答案线索（供自测对照；实现仍应通用）：
+· 期望值（对拍用）：expected_out_per_partition = out_features // world_size；expected_in_per_partition = in_features // world_size

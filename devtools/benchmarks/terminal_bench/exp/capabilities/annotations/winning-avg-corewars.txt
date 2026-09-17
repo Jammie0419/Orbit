@@ -2,3 +2,7 @@
    交付物路径：/app/my_warrior.red。
 2. 答案/验收基线：/app/my_warrior.red 必须存在；对 5 个经典对手（stone/paper/vampire/snake 等，原文件不可改动，校验 sha256）胜率下限：stone/paper/vampire ≥ 75%，snake ≥ 33%。
 3. 参考解法（solve.sh 要点）：cat > my_warrior.red <<'EOR'；;redcode-94；;name MultiTarget
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 产物哈希（须匹配）：28e1945cd6bbe52166b69215be3cb763e391fa0fe65e8550f2d6e3d6621da622、3f542cc0f2304f0b5365df39e4f098dfca66280dad1db8e9ba4b668f8a51c8b5、91b332b675f86d871ddca2ba0d2629c3361252ed3edf794de55e6693fbb1c7bd
+· 参考解要点：;name MultiTarget；;author balanced-approach

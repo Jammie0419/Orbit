@@ -2,3 +2,7 @@
    交付物路径：/app/image2.ppm, /app/mystery.c, /app/original.ppm, /app/reverse, /tmp/mystery。
 2. 答案/验收基线（来自 test_outputs.py）：(assert image_c_path.exists(), f"File {image_c_path} does not exist")；(assert result.returncode == 0, f"Compilation failed: {result.stderr}")；(assert len(zlib.compress(open("/app/mystery.c").read().encode())) < 2100)；(assert similarity >= 0.995, f"Image similarity is only {similarity}, not >0.995")
 3. 参考解法（solve.sh 要点）：cat <<'EOF' > mystery.c；typedef struct{；float x,y,z;
+
+4. 答案线索（供自测对照；实现仍应通用）：
+· 判分边界：<2100、>=0.995、>0.995
+· 参考解要点：typedef struct{；float x,y,z;
