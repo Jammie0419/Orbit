@@ -291,7 +291,7 @@
 | 任务 | 难度 | Agent | Verifier | 内存 | CPU | pass@1 | pass@5 | Time |
 |---|---|---|---|---|---|---|---|---|
 | log-summary-date-ranges | medium | 15m | 15m | 2GB | 1 | 1.000 | 1.000 | exp/pass@1/log-summary-date-ranges/2026-09-17__21-41-40 |
-| multi-source-data-merger | medium | 15m | 15m | 2GB | 1 | | | |
+| multi-source-data-merger | medium | 15m | 15m | 2GB | 1 | 1.000 | 1.000 | exp/pass@1/multi-source-data-merger/2026-09-17__22-27-44 |
 | regex-log | medium | 15m | 15m | 2GB | 1 | 1.000 | 1.000 | exp/pass@1/regex-log/2026-09-17__10-40-11 |
 | financial-document-processor | medium | 20m | 20m | 4GB | 1 | 1.000 | 1.000 | exp/pass@1/financial-document-processor/2026-09-17__18-41-46 |
 
