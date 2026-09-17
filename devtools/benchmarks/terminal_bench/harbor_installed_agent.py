@@ -708,10 +708,43 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
                   sed -i -E 's#URIs: https?://[a-z.-]*deb\\.debian\\.org/debian#URIs: https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list.d/debian.sources || true
                 fi
                 sed -i -E 's#https?://[a-z.-]*deb\\.debian\\.org/debian#https://mirrors.tuna.tsinghua.edu.cn/debian#g' /etc/apt/sources.list 2>/dev/null || true
-                apt-get update
-                # Keep the downloaded archives in the mounted cache so later trials can
-                # install offline even if docker-clean reappears from a base layer.
-                apt-get -o Binary::apt::APT::Keep-Downloaded-Packages=true install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip
+                # apt is the one install step NOT safe to run concurrently, for two
+                # measured reasons (2026-09-17):
+                #   * the shared deb cache is a bind mount, so it inherits the HOST dir's
+                #     ownership. apt downloads as the `_apt` sandbox user, so once any
+                #     container leaves a 0700 `lists/partial` behind, every later trial
+                #     dies with "open (13: Permission denied)" — one bad write poisons the
+                #     cache for good (observed: a uid-1007/0700 partial killed every
+                #     subsequent trial). chmod 777 + Sandbox::User=root below make every
+                #     writer root, so ownership cannot drift again.
+                #   * the CN mirror does not tolerate parallel streams: with 3 trials
+                #     installing at once, 1 in 3 died even WITH retries ("Unable to
+                #     connect to mirrors.tuna.tsinghua.edu.cn"); 5-way lost 2 of 5.
+                # So the apt phase is serialized behind one flock; because the lock file
+                # lives on the shared mount it coordinates across containers. Only the
+                # ~40s/trial install queues up -- the AI work that follows stays parallel.
+                for d in /var/cache/apt /var/cache/apt/archives /var/cache/apt/archives/partial \
+                         /var/lib/apt/lists /var/lib/apt/lists/partial; do
+                  mkdir -p "$d" 2>/dev/null || true
+                  chmod 777 "$d" 2>/dev/null || true
+                done
+                exec 9>/var/cache/apt/.apt-phase.lock || true
+                flock -w 900 9 || echo "install: apt lock wait timed out; proceeding"
+                APT_OK=0
+                for attempt in 1 2 3; do
+                  if apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 update \
+                     && apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 -o Binary::apt::APT::Keep-Downloaded-Packages=true install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip; then
+                    APT_OK=1
+                    break
+                  fi
+                  echo "install: apt attempt $attempt/3 failed; retrying in $((attempt * 10))s"
+                  sleep $((attempt * 10))
+                done
+                exec 9>&-
+                if [ "$APT_OK" != "1" ]; then
+                  echo "install: apt-get update+install failed after 3 attempts"
+                  exit 1
+                fi
               elif command -v apk >/dev/null 2>&1; then
                 apk add --no-cache git curl bash ca-certificates procps python3 py3-pip py3-virtualenv
               elif command -v yum >/dev/null 2>&1; then
@@ -1108,23 +1141,33 @@ PY
             f"""
             python3 - <<'PY'
             import sys
+            import time
             import urllib.error
             import urllib.request
-            req = urllib.request.Request({provider_url!r}, method="GET")
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    print({provider_name!r} + "_preflight_status", resp.status)
-                    sys.exit(0 if 200 <= resp.status < 500 else 1)
-            except urllib.error.HTTPError as exc:
-                print({provider_name!r} + "_preflight_status", exc.code)
-                sys.exit(0 if 200 <= exc.code < 500 else 1)
-            except Exception as exc:
-                print({provider_name!r} + "_preflight_error", type(exc).__name__)
-                sys.exit(1)
+            attempts = 3
+            last_exc = None
+            for attempt in range(1, attempts + 1):
+                req = urllib.request.Request({provider_url!r}, method="GET")
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        print({provider_name!r} + "_preflight_status", resp.status)
+                        sys.exit(0 if 200 <= resp.status < 500 else 1)
+                except urllib.error.HTTPError as exc:
+                    # No Authorization header is sent on purpose: this only proves the
+                    # endpoint is reachable, so 4xx (401 on a bare /models GET) is a PASS.
+                    print({provider_name!r} + "_preflight_status attempt " + str(attempt) + "/" + str(attempts), exc.code)
+                    sys.exit(0 if 200 <= exc.code < 500 else 1)
+                except Exception as exc:
+                    print({provider_name!r} + "_preflight_error attempt " + str(attempt) + "/" + str(attempts), type(exc).__name__)
+                    last_exc = exc
+                if attempt < attempts:
+                    time.sleep(5)
+            print("preflight_failed after " + str(attempts) + " attempts:", last_exc)
+            sys.exit(1)
             PY
             """
         ).strip()
-        result = await environment.exec(command=command, timeout_sec=20)
+        result = await environment.exec(command=command, timeout_sec=90)
         (self.logs_dir / "network-preflight.txt").write_text(
             f"stdout:\n{result.stdout or ''}\nstderr:\n{result.stderr or ''}\nreturn_code={result.return_code}\n",
             encoding="utf-8",

@@ -288,8 +288,22 @@ def main() -> int:
     parser.add_argument("--dataset", default="terminal-bench/terminal-bench-2-1")
     parser.add_argument("--harbor-bin", default="harbor")
     parser.add_argument("--n-tasks", type=int, default=5)
-    parser.add_argument("--n-concurrent", type=int, default=1)
-    parser.add_argument("-k", "--k", type=int, default=1, dest="k", help="trials per task (harbor -k); default 1")
+    # Default concurrency comes from $TERMINAL_BENCH_N_CONCURRENT (set in
+    # .env.terminal_bench.linux); an explicit --n-concurrent still wins, and the
+    # effective value is recorded in the run manifest either way.
+    try:
+        _n_concurrent_default = int(os.environ.get("TERMINAL_BENCH_N_CONCURRENT") or 1)
+    except ValueError:
+        _n_concurrent_default = 1
+    parser.add_argument("--n-concurrent", type=int, default=_n_concurrent_default,
+                        help="max concurrent trials; default from $TERMINAL_BENCH_N_CONCURRENT or 1")
+    # Default per-task trial count from $TERMINAL_BENCH_K; explicit -k overrides.
+    try:
+        _k_default = int(os.environ.get("TERMINAL_BENCH_K") or 1)
+    except ValueError:
+        _k_default = 1
+    parser.add_argument("-k", "--k", type=int, default=_k_default, dest="k",
+                        help="trials per task (harbor -k); default from $TERMINAL_BENCH_K or 1")
     parser.add_argument("--agent-setup-timeout-multiplier", type=float, default=1.0, help="harbor agent-setup timeout multiplier; default 1.0 (official)")
     parser.add_argument("--environment-build-timeout-multiplier", type=float, default=1.0, help="harbor environment-build timeout multiplier; default 1.0 (official)")
     parser.add_argument("--ouroboros-light-model", default="", help="light model kwarg; default = main --model (avoids v6.27.0 gemini-3.5-flash default)")
@@ -374,6 +388,7 @@ def main() -> int:
             "n_tasks": effective_n_tasks,
             "requested_n_tasks_arg": int(args.n_tasks),
             "n_concurrent": int(args.n_concurrent),
+            "k": int(args.k),
             "source_dirty_allowed": bool(args.allow_dirty_seed),
             "selection": {
                 "mode": "explicit_task_ids" if actual_include_filters else "deterministic_first_n",
