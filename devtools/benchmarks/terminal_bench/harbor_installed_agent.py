@@ -98,6 +98,40 @@ def _secret_shaped_source_name(name: str) -> bool:
     return False
 
 
+def _task_name_from_trial_dir(logs_dir: Path | str) -> str:
+    """Resolve a trial's task NAME without trusting the trial directory's name.
+
+    Harbor names a trial dir ``<task>__<hash>`` when the task was resolved by name, but
+    ``<taskhash>__<hash>`` when it was resolved by PATH. Measured on gpt2-codegolf: its dirs
+    are ``fe42af8e...__JujTBFJ`` while the task is ``terminal-bench/gpt2-codegolf``. Deriving
+    the name from the dir therefore yields a hash, and every lookup keyed by the task name --
+    the annotation table, the cached ``task.toml``, and through it the test.sh patch that puts
+    uv on the verifier's PATH -- quietly does nothing.
+
+    ``config.json`` is written when the trial dir is created, before the agent runs, so it is
+    readable here. Order: ``task.name`` (name-resolved), then ``task.path``'s parent directory
+    (path-resolved), then the dir name as a last resort.
+    """
+    trial_dir = Path(logs_dir).resolve().parent
+    try:
+        data = json.loads((trial_dir / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if isinstance(data, dict):
+        task = data.get("task") if isinstance(data.get("task"), dict) else {}
+        named = str(task.get("name") or "").strip()
+        if named:
+            return named.rsplit("/", 1)[-1]
+        local_path = str(task.get("path") or "").strip()
+        if local_path:
+            # .../packages/<org>/<task>/<digest> -> <task>
+            parent = Path(local_path).parent.name
+            if parent:
+                return parent
+    name = trial_dir.name
+    return name.rsplit("__", 1)[0] if "__" in name else name
+
+
 # test.sh mirror bootstrap block, injected right after the shebang by
 # _patch_test_sh_for_china (both the host package-cache copy — the actual source
 # the verifier uploads — and the in-container copy, when shared). Semantics:
@@ -923,21 +957,28 @@ PY
 
     async def _patch_test_sh_host_cache(self, environment: BaseEnvironment) -> None:
         """Patch the host harbor package cache copy of test.sh (verifier source)."""
-        task_name = ""
-        try:
-            parent = Path(self.logs_dir).resolve().parent.name  # "<task>__<trialhash>"
-            if "__" in parent:
-                task_name = parent.rsplit("__", 1)[0]
-        except Exception:
-            task_name = ""
+        task_name = _task_name_from_trial_dir(self.logs_dir)
         if not task_name:
             return
         try:
             toml = self._cached_task_toml(task_name)
             if toml is None:
+                # Loud, not silent. A skipped patch means the verifier runs the task's own
+                # `curl -LsSf https://astral.sh/uv/... | sh`, which cannot reach GitHub from
+                # here: it burns ~130s and then fails with "uvx: command not found", scoring
+                # every trial 0 no matter what the agent delivered.
+                await self._append_log(
+                    environment,
+                    f"patch: WARNING no cached task.toml for {task_name!r} -- "
+                    f"test.sh left unpatched, the verifier may fail to find uv",
+                )
                 return
             test_sh = toml.parent / "tests" / "test.sh"
             if not test_sh.is_file():
+                await self._append_log(
+                    environment,
+                    f"patch: WARNING {test_sh} not found -- test.sh left unpatched",
+                )
                 return
             original = test_sh.read_text(encoding="utf-8")
             patched = _inject_test_sh_mirror_block(original)
@@ -1181,7 +1222,13 @@ PY
             attempts = 3
             last_exc = None
             for attempt in range(1, attempts + 1):
-                req = urllib.request.Request({provider_url!r}, method="GET")
+                # User-Agent matters: Cloudflare-fronted gateways (opencode.ai) answer
+                # 403 "error code: 1010" to urllib's default UA while allowing the real
+                # clients. Sending a curl UA makes this probe mean what it says instead
+                # of relying on "4xx still counts as reachable".
+                req = urllib.request.Request(
+                    {provider_url!r}, method="GET", headers={{"User-Agent": "curl/8.5.0"}}
+                )
                 try:
                     with urllib.request.urlopen(req, timeout=10) as resp:
                         print({provider_name!r} + "_preflight_status", resp.status)
@@ -1675,11 +1722,10 @@ PY
             return instruction
         if not _ann.annotations_enabled():
             return instruction
-        try:
-            trial_dir_name = Path(self.logs_dir).resolve().parent.name  # "<task>__<trialhash>"
-        except Exception:
-            trial_dir_name = ""
-        rendered = _ann.render_task_annotations(trial_dir_name)
+        # From config.json, not from the dir name: a path-resolved task's dir is
+        # "<taskhash>__<hash>", which resolves to nothing and silently drops the annotation.
+        task_name = _task_name_from_trial_dir(self.logs_dir)
+        rendered = _ann.render_task_annotations(task_name)
         return f"{instruction}\n\n{rendered}" if rendered else instruction
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:

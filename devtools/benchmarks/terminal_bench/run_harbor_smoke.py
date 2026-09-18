@@ -37,29 +37,6 @@ from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mo
 AGENT_IMPORT = "devtools.benchmarks.terminal_bench.harbor_installed_agent:OuroborosTerminalBenchAgent"
 
 
-def find_local_task_path(task_name: str) -> pathlib.Path | None:
-    """Find the local cached task directory for a given task name.
-    
-    Returns the path to the most recent version of the task in the local cache,
-    or None if not found.
-    """
-    # Extract the bare task name (remove org prefix if present)
-    bare_name = task_name.rsplit("/", 1)[-1] if "/" in task_name else task_name
-    
-    cache_dir = pathlib.Path.home() / ".cache/harbor/tasks/packages/terminal-bench"
-    task_dir = cache_dir / bare_name
-    
-    if not task_dir.exists():
-        return None
-    
-    # Find the most recent version (sha directory)
-    versions = sorted(task_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
-    if not versions:
-        return None
-    
-    return versions[0]
-
-
 def harbor_command(
     *,
     task_names: list[str],
@@ -83,58 +60,34 @@ def harbor_command(
     effective_light_model = light_model or model
     
     # Try to use local task cache to avoid connecting to remote registry
-    local_paths = []
-    for task_name in task_names:
-        local_path = find_local_task_path(task_name)
-        if local_path:
-            local_paths.append((task_name, local_path))
     
-    # Determine if we can use local paths for all tasks
-    use_local = len(local_paths) == len(task_names) and len(local_paths) > 0
-    
-    if use_local:
-        # Use --path for each task (local cache mode)
-        cmd = [
-            harbor_bin,
-            "run",
-            "--agent-import-path",
-            AGENT_IMPORT,
-            "--model",
-            f"ouroboros-{model.replace('/', '-')}",
-            "--agent-kwarg",
-            f"ouroboros_model={model}",
-            "--agent-kwarg",
-            f"ouroboros_light_model={effective_light_model}",
-            "--agent-kwarg",
-            "install_timeout_sec=1200",
-            "--agent-kwarg",
-            "server_start_timeout_sec=240",
-            "--agent-kwarg",
-            f"dataset={dataset}",
-        ]
-    else:
-        # Use --dataset with remote registry (fallback)
-        cmd = [
-            harbor_bin,
-            "run",
-            "--dataset",
-            dataset,
-            "--agent-import-path",
-            AGENT_IMPORT,
-            "--model",
-            f"ouroboros-{model.replace('/', '-')}",
-            "--agent-kwarg",
-            f"ouroboros_model={model}",
-            "--agent-kwarg",
-            f"ouroboros_light_model={effective_light_model}",
-            "--agent-kwarg",
-            "install_timeout_sec=1200",
-            "--agent-kwarg",
-            "server_start_timeout_sec=240",
-            # Dataset identity for the adapter's per-task cache lookup (org is not a constant).
-            "--agent-kwarg",
-            f"dataset={dataset}",
-        ]
+    # ONE command shape for both cases. `--dataset <org>/<name> --include-task-name <task>`
+    # resolves through harbor's local RegistryDB + the already-cached packages, so it needs no
+    # network -- and it yields PackageTaskId, whose get_name() is the TASK NAME. The `--path`
+    # route that used to be preferred here resolves to LocalTaskId, whose get_name() is the
+    # cache digest, so every trial dir came out as `<taskhash>__<hash>`: unreadable, and every
+    # tool that derives the task from the dir name silently got a hash.
+    cmd = [
+        harbor_bin,
+        "run",
+        "--dataset",
+        dataset,
+        "--agent-import-path",
+        AGENT_IMPORT,
+        "--model",
+        f"ouroboros-{model.replace('/', '-')}",
+        "--agent-kwarg",
+        f"ouroboros_model={model}",
+        "--agent-kwarg",
+        f"ouroboros_light_model={effective_light_model}",
+        "--agent-kwarg",
+        "install_timeout_sec=1200",
+        "--agent-kwarg",
+        "server_start_timeout_sec=240",
+        # Dataset identity for the adapter's per-task cache lookup (org is not a constant).
+        "--agent-kwarg",
+        f"dataset={dataset}",
+    ]
     if host_settings_path:
         cmd.extend(["--agent-kwarg", f"host_settings_path={host_settings_path}"])
     cmd.extend(
@@ -154,20 +107,15 @@ def harbor_command(
             "--yes",
         ]
     )
-    # Use local registry to avoid connecting to remote Supabase registry
+    # Registry override for a BARE dataset name (no "/"). A name like
+    # `terminal-bench/terminal-bench-2-1` takes the package route, which uses the local
+    # RegistryDB and ignores this flag.
     local_registry = pathlib.Path.home() / ".cache/harbor/local_registry.json"
-    if local_registry.exists() and not use_local:
+    if local_registry.exists():
         cmd.extend(["--registry-path", str(local_registry)])
-    
-    # Add task specifications based on mode
-    if use_local:
-        # Use --path for each task
-        for task_name, local_path in local_paths:
-            cmd.extend(["--path", str(local_path)])
-    else:
-        # Use --include-task-name for remote registry
-        for task_name in task_names:
-            cmd.extend(["--include-task-name", task_name])
+
+    for task_name in task_names:
+        cmd.extend(["--include-task-name", task_name])
     # Host cache mounts (pip/uv wheels, apt debs + index, HF artifacts). Smoke mode used to
     # emit NONE, so every trial re-downloaded ~200MB of large wheels inside harbor's 360s
     # agent-setup budget and routinely died with AgentSetupTimeoutError. The mount set is
@@ -243,7 +191,9 @@ def _harbor_trial_rows(result_path: pathlib.Path) -> list[dict[str, object]]:
         verifier = data.get("verifier_result") if isinstance(data.get("verifier_result"), dict) else {}
         rewards = verifier.get("rewards") if isinstance(verifier.get("rewards"), dict) else {}
         rows.append({
-            "task": _task_key(data.get("trial_name") or trial_result.parent.name),
+            # The trial's own task_name, not the dir name: a `--path` run names the dir
+            # `<taskhash>__<hash>`, so string surgery on it yields a hash, not a task.
+            "task": _task_key(data.get("task_name") or data.get("trial_name") or trial_result.parent.name),
             "reward": rewards.get("reward"),
             "started_at": str(data.get("started_at") or ""),
         })
@@ -308,6 +258,22 @@ def _print_score_summary(rows: list[dict[str, object]]) -> None:
               "first@1 is not fully determined for that task")
 
 
+def _trial_task_name(job_dir: pathlib.Path, trial_name: str) -> str:
+    """The task's own name, read from the trial's result.json.
+
+    The job-level summary keys trials by TRIAL name, and a trial dir is `<task>__<hash>` for a
+    dataset-resolved task but `<taskhash>__<hash>` for a `--path` run -- which is what
+    run_harbor_smoke picks whenever the package is already in the local cache. The hash form
+    cannot be turned back into a task name by string surgery, so it is read from the trial's
+    own result.json, which carries the real one either way.
+    """
+    try:
+        data = json.loads((job_dir / trial_name / "result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("task_name") or "").strip() if isinstance(data, dict) else ""
+
+
 def _harbor_task_outcomes(result_path: pathlib.Path) -> list[dict[str, object]]:
     try:
         data = json.loads(result_path.read_text(encoding="utf-8"))
@@ -334,7 +300,15 @@ def _harbor_task_outcomes(result_path: pathlib.Path) -> list[dict[str, object]]:
                 if not instance_id or instance_id in seen:
                     continue
                 seen.add(instance_id)
-                outcomes.append({"instance_id": instance_id, "reward": reward_value})
+                outcomes.append({
+                    "instance_id": instance_id,
+                    # The REQUESTED id is a task name; keying this comparison on the trial name
+                    # made every `--path` run look like it returned an unexpected task, which
+                    # stamped harness_failed/harbor_result_unresolved on a clean run.
+                    # Normalised, so a --path run and a dataset run record the same id shape.
+                    "task_name": _task_key(_trial_task_name(result_path.parent, instance_id) or instance_id),
+                    "reward": reward_value,
+                })
     return sorted(outcomes, key=lambda item: str(item["instance_id"]))
 
 
@@ -518,7 +492,10 @@ def main() -> int:
                     returncode = returncode or 2
             if harbor_result is not None:
                 observed_outcomes = _harbor_task_outcomes(harbor_result)
-                observed_ids = {_task_key(item.get("instance_id")) for item in observed_outcomes}
+                # Keyed on the TASK name, not the trial name: a --path run names its trial
+                # dirs `<taskhash>__<hash>`, which never equals the requested task name.
+                observed_ids = {_task_key(item.get("task_name") or item.get("instance_id"))
+                                for item in observed_outcomes}
                 expected_ids = {_task_key(name) for name in actual_include_filters}
                 if not observed_outcomes and effective_n_tasks > 0:
                     harbor_result_error = "Harbor result contained no parseable task outcomes"
@@ -543,7 +520,8 @@ def main() -> int:
                 # The finalization seam rewrites the manifest on EVERY exit path, so these
                 # observed-result fields need no separate write here.
                 manifest["output_paths"]["harbor_result"] = str(harbor_result)
-                manifest["observed_task_ids"] = [str(item["instance_id"]) for item in observed_outcomes]
+                manifest["observed_task_ids"] = [str(item.get("task_name") or item["instance_id"])
+                                                 for item in observed_outcomes]
                 manifest["official_result_summary"] = {
                     "result_path": str(harbor_result),
                     "completed_outcomes": len(observed_outcomes),
@@ -551,10 +529,13 @@ def main() -> int:
         ledger_tasks: list[dict[str, object]] = []
         if observed_outcomes and not harbor_result_error:
             ledger_tasks.extend(observed_outcomes)
-            recorded_ids = {str(item.get("instance_id") or "") for item in ledger_tasks}
+            recorded_ids = {str(item.get("task_name") or item.get("instance_id") or "") for item in ledger_tasks}
             if actual_include_filters:
                 for task in task_names:
-                    if task not in recorded_ids:
+                    # _task_key on the requested name too: task_names are `org/name` while the
+                    # recorded ids are bare, so an unnormalised compare wrote a second, empty
+                    # row for a task that had already been recorded.
+                    if _task_key(task) not in recorded_ids:
                         ledger_tasks.append({"instance_id": task, "reward": None})
             while not actual_include_filters and len(ledger_tasks) < effective_n_tasks:
                 ledger_tasks.append({"instance_id": f"selection-slot-missing-{len(ledger_tasks) + 1}", "reward": None})
@@ -565,7 +546,7 @@ def main() -> int:
             [
                 task_result_row(
                     benchmark="terminal_bench",
-                    instance_id=str(task["instance_id"]),
+                    instance_id=str(task.get("task_name") or task["instance_id"]),
                     status=status,
                     metadata={
                         "reason_code": reason,

@@ -2585,9 +2585,11 @@ def test_terminal_bench_parses_harbor_task_outcomes(tmp_path):
         encoding="utf-8",
     )
 
+    # task_name is the resolved TASK id (here identical to the trial id, since these rows name
+    # no trial dir); the comparison in main() keys on it rather than on the trial dir name.
     assert harbor_smoke._harbor_task_outcomes(result_path) == [
-        {"instance_id": "task-a", "reward": 0.0},
-        {"instance_id": "task-b", "reward": 1.0},
+        {"instance_id": "task-a", "task_name": "task-a", "reward": 0.0},
+        {"instance_id": "task-b", "task_name": "task-b", "reward": 1.0},
     ]
 
 
@@ -6950,7 +6952,9 @@ def test_terminal_bench_smoke_accepts_harbor_trial_named_outcomes(tmp_path):
         encoding="utf-8",
     )
     outcomes = module._harbor_task_outcomes(result)
-    assert outcomes == [{"instance_id": "regex-log__rYVxmUv", "reward": 0.0}]
+    assert outcomes == [
+        {"instance_id": "regex-log__rYVxmUv", "task_name": "regex-log", "reward": 0.0}
+    ]
 
     observed = {module._task_key(item["instance_id"]) for item in outcomes}
     expected = {module._task_key(name) for name in ["terminal-bench/regex-log"]}
@@ -7029,3 +7033,89 @@ def test_terminal_bench_smoke_pass_at_1_is_the_first_trial_started():
     unknown = [{"task": "t", "reward": 1.0, "started_at": ""},
                {"task": "t", "reward": 0.0, "started_at": "2026-01-01T00:01:00Z"}]
     assert module._score_summary(unknown)[0][3] == 0.0
+
+
+def test_terminal_bench_task_name_survives_path_resolved_trials(tmp_path):
+    """A path-resolved task's trial dir is `<taskhash>__<hash>`, not `<task>__<hash>`.
+
+    Reading the task name off the dir therefore yields a hash, and every lookup keyed by the
+    task name -- the annotation table, the cached task.toml, and the test.sh patch that puts uv
+    on the verifier's PATH -- silently does nothing. Measured on gpt2-codegolf, whose dirs are
+    `fe42af8e...__JujTBFJ` while the task is `terminal-bench/gpt2-codegolf`.
+    """
+    from devtools.benchmarks.terminal_bench.harbor_installed_agent import _task_name_from_trial_dir
+
+    # name-resolved: config.json carries task.name
+    named = tmp_path / "regex-log__Yk49yUJ" / "agent"
+    named.mkdir(parents=True)
+    (named.parent / "config.json").write_text(json.dumps({"task": {"name": "terminal-bench/regex-log"}}))
+    assert _task_name_from_trial_dir(named) == "regex-log"
+
+    # path-resolved: no task.name, but task.path ends in <task>/<digest>
+    local = tmp_path / "fe42af8e9c5aa927c3b680acd08e4303__JujTBFJ" / "agent"
+    local.mkdir(parents=True)
+    (local.parent / "config.json").write_text(json.dumps({
+        "task": {"path": "/home/lzm/.cache/harbor/tasks/packages/terminal-bench/gpt2-codegolf/fe42af8e9c5aa927c"}
+    }))
+    assert _task_name_from_trial_dir(local) == "gpt2-codegolf"
+
+    # no config.json at all: fall back to the dir name before "__"
+    bare = tmp_path / "prove-plus-comm__abc1234" / "agent"
+    bare.mkdir(parents=True)
+    assert _task_name_from_trial_dir(bare) == "prove-plus-comm"
+
+    # unreadable config.json must not raise
+    broken = tmp_path / "x__y" / "agent"
+    broken.mkdir(parents=True)
+    (broken.parent / "config.json").write_text("{not json")
+    assert _task_name_from_trial_dir(broken) == "x"
+
+    # and it must beat the dir name when both are present
+    both = tmp_path / "fe42af8e9c5aa927c3b680acd08e4303__T7PQVDM" / "agent"
+    both.mkdir(parents=True)
+    (both.parent / "config.json").write_text(json.dumps({
+        "task": {"path": "/cache/packages/terminal-bench/gpt2-codegolf/deadbeef"}
+    }))
+    assert _task_name_from_trial_dir(both) == "gpt2-codegolf"
+
+
+def test_terminal_bench_smoke_matches_path_resolved_trials(tmp_path):
+    """A --path run names its dirs `<taskhash>__<hash>`, which is not a task name.
+
+    The comparison keyed on the trial name turned that hash into the observed task id, so a
+    clean run was stamped harness_failed/harbor_result_unresolved (measured on the 09-18 18:22
+    log-summary-date-ranges run). The task name is read from each trial's own result.json.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "tb_harbor_smoke",
+        REPO_ROOT / "devtools" / "benchmarks" / "terminal_bench" / "run_harbor_smoke.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    job = tmp_path / "2026-09-18__18-22-10"
+    trial = job / "27b074a2f10fff7606e096f3abd8dced__SmvGAtM"
+    trial.mkdir(parents=True)
+    (trial / "result.json").write_text(json.dumps({
+        "task_name": "terminal-bench/log-summary-date-ranges",
+        "trial_name": "27b074a2f10fff7606e096f3abd8dced__SmvGAtM",
+        "verifier_result": {"rewards": {"reward": 1.0}},
+        "started_at": "2026-09-18T10:22:10Z",
+    }), encoding="utf-8")
+    (job / "result.json").write_text(json.dumps({
+        "stats": {"evals": {"k": {"reward_stats": {
+            "reward": {"1.0": ["27b074a2f10fff7606e096f3abd8dced__SmvGAtM"]}
+        }}}}
+    }), encoding="utf-8")
+
+    outcomes = module._harbor_task_outcomes(job / "result.json")
+    assert outcomes[0]["task_name"] == "log-summary-date-ranges"
+    observed = {module._task_key(item["task_name"]) for item in outcomes}
+    expected = {module._task_key("terminal-bench/log-summary-date-ranges")}
+    assert observed.issubset(expected), "a --path run must not read as an unexpected task id"
+
+    # The score summary reads the same authoritative name.
+    assert module._harbor_trial_rows(job / "result.json")[0]["task"] == "log-summary-date-ranges"

@@ -65,6 +65,28 @@ from ouroboros.context_budget import (
 )
 
 
+# The opencode.ai zen gateway refuses a completion that lacks an
+# ``x-opencode-session`` header: it answers 400 MissingSessionID ("cannot be routed
+# efficiently") while a GET on /models still passes, so the failure only appears on
+# the first real call. The value is opaque to the gateway -- any stable id routes --
+# so one id per process is enough, and giving each process its own keeps concurrent
+# trials from sharing a session. Generated once so every client built from the same
+# target sends the same value.
+_OPENCODE_SESSION_ID = "ouroboros-" + hashlib.sha256(os.urandom(16)).hexdigest()[:12]
+
+
+def _compatible_default_headers(base_url: str) -> Dict[str, str]:
+    """Extra request headers an OpenAI-compatible gateway demands.
+
+    Only opencode.ai needs one today. Keeping the rule in a named helper puts the
+    workaround next to its reason instead of leaving unexplained magic inside the
+    target dict.
+    """
+    if "opencode.ai" in str(base_url or "").lower():
+        return {"x-opencode-session": _OPENCODE_SESSION_ID}
+    return {}
+
+
 def _structured_error_values(payload: Any) -> Set[str]:
     if not isinstance(payload, dict):
         return set()
@@ -1400,7 +1422,7 @@ class LLMClient:
                 "usage_model": usage_model,
                 "api_key": api_key,
                 "base_url": base_url,
-                "default_headers": {},
+                "default_headers": _compatible_default_headers(base_url),
                 "supports_openrouter_extensions": False,
                 "supports_generation_cost": False,
             }
