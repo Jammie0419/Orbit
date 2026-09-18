@@ -1,6 +1,0 @@
-1. 任务本质与交付物：Can you tune this MuJoCo model file (mjcf) such that it takes 60% of the original time or less to simulate the same scene for a total of two simulation seconds? The same full physics state should be reached within atol=1
-2. 答案/验收基线（来自 test_outputs.py）：(assert app_ref.read_text() == test_ref.read_text(), "Reference model has changed")；(assert model_path.exists(), "Tuned model file does not exist")；(assert not np.isnan(state).any(), "Final state contains NaN values")；(assert not np.isinf(state).any(), "Final state contains Inf values")；(assert np.allclose(final_state, final_state_ref, atol=atol), ()；(assert act_time_pctg <= pctg, ()
-3. 参考解法（solve.sh 要点）：cp /app/model_ref.xml /app/model.xml；sed -i '/<mujoco model="Cable">/a\  <option solver="PGS"\/>' /app/model.xml
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

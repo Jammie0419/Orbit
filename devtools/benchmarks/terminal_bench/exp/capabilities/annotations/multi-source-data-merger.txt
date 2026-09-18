@@ -1,8 +1,0 @@
-1. 任务本质与交付物：Merge user data from three different sources with different formats and schemas. Input files: - /data/source_a/users.json - Primary source (highest priority) - /data/source_b/users.csv - Secondary source - /data/source_c
-   交付物路径：/app/conflicts.json, /app/merged_users.parquet。
-2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists("/app/merged_users.parquet"), "merged_users.parquet not found")；(assert os.path.exists("/app/conflicts.json"), "conflicts.json not found")；(assert len(df) == 4)；(assert set(df["user_id"]) == {101, 102, 103, 104})；(user_101 = df[df["user_id"] == 101].iloc[0])；(assert user_101["name"] == "John Doe")
-3. 参考解法（solve.sh 要点）：python3 << 'PYTHON_CODE'；import json；import pandas as pd
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：John Doe、john@a.com、2024-01-15、Alice Brown、alice@c.com、2024-04-01
-· 参考解要点：python3 << 'PYTHON_CODE'

@@ -1,6 +1,0 @@
-terminal-bench/circuit-fibsqrt
-terminal-bench/feal-differential-cryptanalysis
-terminal-bench/feal-linear-cryptanalysis
-terminal-bench/regex-chess
-terminal-bench/schemelike-metacircular-eval
-terminal-bench/write-compressor

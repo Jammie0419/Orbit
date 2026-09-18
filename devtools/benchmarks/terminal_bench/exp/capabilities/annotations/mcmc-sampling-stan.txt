@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Sample from a hierarchical Bayesian model using R and Stan, and estimate the posterior means of the parameters. Your task: 1. Install the RStan package (version 2.32.7) for R and the required dependencies for Stan 2. Loa
-   交付物路径：/app/analysis.R, /app/hierarchical_model.stan, /app/posterior_alpha_mean.txt, /app/posterior_beta_mean.txt。
-2. 答案/验收基线（来自 test_outputs.py）：(assert result.returncode == 0, ()；(f"{result.returncode}, stderr: {result.stderr}")；(assert False, "Timeout while checking RStan package")；(assert False, "R command not found")；(assert os.path.exists(stan_model_path), ()；(assert False, "Timeout while validating Stan model structure")
-3. 参考解法（solve.sh 要点）：gfortran \；liblapack-dev \；libblas-dev && \
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

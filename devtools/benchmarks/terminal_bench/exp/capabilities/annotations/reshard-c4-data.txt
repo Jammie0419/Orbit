@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Help me create two scripts for managing the resharding of my dataset: 1. **/app/compress.py**: A script that takes an input directory and output directory as command-line arguments and reshards the data according to the 
-   交付物路径：/app/compress.py, /app/decompress.py。
-2. 答案/验收基线（来自 test_outputs.py）：(file_hash = hashlib.sha256(file_content.encode()).hexdigest())；(print(f"Compress script failed with return code {result.returncode}"))；(assert False, f"Compress script failed: {result.stderr}")；(assert False, "The compress script timed out!")；(assert os.path.exists(TEST_OUTPUT_DIR), "Output directory was not created")；(assert file_size <= MAX_SIZE_PER_FILE, ()
-3. 参考解法（solve.sh 要点）：cat > /app/compress.py << 'EOL'；import glob；import gzip
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 期望值（对拍用）：MAX_FILES_PER_FOLDER = 30

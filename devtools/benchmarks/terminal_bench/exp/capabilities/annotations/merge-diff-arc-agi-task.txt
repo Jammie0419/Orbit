@@ -1,7 +1,0 @@
-1. 任务本质与交付物：mkdir /app/repo, then initialize a git repo at /app/repo. Fetch the first git bundle located at /app/bundle1.bundle and ensure it is checked out into a local branch named branch1, fetching from the HEAD reference, Fetch 
-   交付物路径：/app/repo, /app/repo/.git, /app/repo/algo.py。
-2. 答案/验收基线（来自 test_outputs.py）：(assert git_path.exists(), "Git repository does not exist in /app/repo")；(assert result.returncode == 0, "Git branch command failed")；(assert "branch1" in branches, "Branch1 from bundle1 not found in git history")；(assert "branch2" in branches, "Branch2 from bundle2 not found in git history")；(assert algo_path.exists(), "algo.py file does not exist in /app/repo")；(assert hasattr(algo_module, "map"), "algo.py does not contain a 'map' function")
-3. 参考解法（solve.sh 要点）：git init；git config user.name "Agent"；git config user.email "ghisknan@hotmail.com"
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

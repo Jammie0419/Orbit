@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Write a file eval.scm that is a metacircular evaluator capable of interpreting the scheme-like language implemented by interp.py. The eval.scm file should read exactly one line from STDIN, this will be a file path to a n
-   交付物路径：/app/eval.scm。
-2. 答案/验收基线（来自 test_outputs.py）：(return result.stdout, result.stderr, result.returncode)；(assert failed == 0)
-3. 参考解法（solve.sh 要点）：cat <<'EOF' > eval.scm；;; Metacircular evaluator for Scheme；;; Helper functions
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：;; Metacircular evaluator for Scheme；;; Helper functions；(define (caar x) (car (car x)))

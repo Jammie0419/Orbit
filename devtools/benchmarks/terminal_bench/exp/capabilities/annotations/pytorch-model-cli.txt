@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Your task is to implement a command line tool that can be used to run inference on an MNIST model. The tool should be called with "./cli_tool weights.json image.png". The output of the tool should only be the predicted d
-   交付物路径：/app/cli_tool, /app/images, /app/prediction.txt, /app/weights.json。
-2. 答案/验收基线（来自 test_outputs.py）：(assert weights_path.exists(), f"File {weights_path} does not exist")；(assert cli_path.exists(), f"File {cli_path} does not exist")；(assert prediction_path.exists(), f"File {prediction_path} does not exist")；(assert content.strip() == "2", ()；(assert text == "2", f"Command returned {result}, expected 2")；(assert is_same, "Predictions do not match expected values")
-3. 参考解法（solve.sh 要点）：cat model.py；cat > /app/peek_weights.py << 'EOL'；import torch
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：state_dict = torch.load("model.pth")

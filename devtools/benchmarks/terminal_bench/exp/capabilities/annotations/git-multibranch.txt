@@ -1,6 +1,0 @@
-1. 任务本质与交付物：Set up a Git server that hosts a project over SSH at git@localhost:/git/project. The server should accept password authentication with the password "password". It should deploy contents from two branches (main and dev) t
-2. 答案/验收基线（来自 test_outputs.py）：(assert "TEST PASSED" in result, "HTTPS multi-branch deploy test failed")
-3. 参考解法（solve.sh 要点）：useradd -m git || true；chmod 700 /home/git/.ssh；touch /home/git/.ssh/authorized_keys
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：useradd -m git || true；chmod 700 /home/git/.ssh；touch /home/git/.ssh/authorized_keys

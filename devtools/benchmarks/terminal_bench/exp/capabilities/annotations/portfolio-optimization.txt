@@ -1,7 +1,0 @@
-1. 任务本质与交付物：You have a Python baseline in portfolio_baseline.py that calculates portfolio risk and return using nested loops. Complete the provided skeleton files (portfolio_optimized.c and portfolio_optimized.py) to create a faster
-2. 答案/验收基线（来自 test_outputs.py）：(assert module_file is not None, "C extension module has no file attribute")；(assert not module_file.endswith(".py"), ()；(assert any(module_file.endswith(ext) for ext in [".so", ".pyd", ".dll"]), ()；(assert hasattr(portfolio_optimized_c, "portfolio_risk_c"), ()；(assert hasattr(portfolio_optimized_c, "portfolio_return_c"), ()；(pytest.fail()
-3. 参考解法（solve.sh 要点）：cat > portfolio_optimized_complete.c << 'EOF'；/*；* High-performance portfolio calculations using C extension
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：<0.001
-· 参考解要点：* High-performance portfolio calculations using C extension

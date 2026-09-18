@@ -1,8 +1,0 @@
-1. 任务本质与交付物：You are provided with a dataset sample from a Bayesian Network in /app/bn_sample_10k.csv. Your first task is to recover the underlying DAG using the provided data. Here is some information about the original DAG that you
-   交付物路径：/app/final_bn_sample.csv, /app/intervened_dag.csv, /app/learned_dag.csv。
-2. 答案/验收基线（来自 test_outputs.py）：(assert bn_sample_path.exists(), f"File {bn_sample_path} does not exist")；(assert learned_dag_path.exists(), f"File {learned_dag_path} does not exist")；(assert not learned_dag.empty, "Learned DAG structure is empty")；(assert all(col in learned_dag.columns for col in expected_columns), ()；(assert learned_edges == true_dag, ()；(assert intervened_dag_path.exists(), f"File {intervened_dag_path} does not exist")
-3. 参考解法（solve.sh 要点）：R -e 'if (!require("remotes")) install.packages("remotes"); remotes::install_version("remotes", version = "2.5.0"); remotes::install_version("bnlearn", version = "4.9")'；cat > modify_bn.R << 'EOF'；library(bnlearn)
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：>=0.001
-· 参考解要点：samples <- read.csv('/app/bn_sample_10k.csv')

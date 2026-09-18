@@ -1,9 +1,0 @@
-1. 任务本质与交付物：In this task you will implement an **LLM inference batching scheduler (shape‑aware)** for a static graph LLM inference system. **Background ** When running large language models on hardware accelerators (such as TPUs, RD
-   交付物路径：/app/task_file/input_data/requests_bucket_1.jsonl, /app/task_file/input_data/requests_bucket_2.jsonl, /app/task_file/output_data/plan_b1.jsonl, /app/task_file/output_data/plan_b2.jsonl。
-2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists("/app/task_file/output_data/plan_b1.jsonl"), ()；(assert os.path.exists("/app/task_file/output_data/plan_b2.jsonl"), ()；(sha256_hash = hashlib.sha256())；(assert actual_hash == expected_hash, ()；(assert ids_req == ids_plan, msg)；(assert sh["seq_align"] % gran == 0, align_msg)
-3. 参考解法（solve.sh 要点）：TARGET_DIR="/app/task_file/output"；cat > "$TARGET_DIR/solution.py" <<'PY'；"""
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：<=3.0、>3.0、<=0.055、<=2.1、<=2.7、<=4.8
-· 产物哈希（须匹配）：8b3cf1e2b06074162038064dd2c114abe308acd32cec7d365ee63ee81978f7de、e15e2d4c4d55f875c42a6042610d6282f6c0657c39d3e0d0f087268252525cb5
-· 参考解要点：TARGET_DIR="/app/task_file/output"；Static-graph, cost-aware batch planner (deterministic, no-arg, fixed hyperparameters).

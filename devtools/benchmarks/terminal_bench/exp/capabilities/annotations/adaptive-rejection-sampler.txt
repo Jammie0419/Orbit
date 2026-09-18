@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Your task is to implement an adaptive-rejection sampler as described in Gilks et al. (1992). 1. Your solution should allow the user to provide reasonable inputs, including the number of points to sample, and should check
-2. 答案/验收基线（来自 test_outputs.py）：(assert ars_file.exists(), ()；(assert re.search(ars_pattern, content), ()；(assert "PASS" in output, ()；(assert test_found, ()；(assert ": PASS" in output or ": FAIL" in output, ()；(assert "mean" in output.lower(), "Test output should include mean statistics")
-3. 参考解法（solve.sh 要点）：cp protected.tar.gz.enc /app/；if [ -f "/protected/protected.tar.gz.enc" ]; then；openssl enc -aes-256-cbc -pbkdf2 -d -pass pass:adaptive-rejection-sampler-2024 -in /protected/protected.tar.gz.enc | tar -xzf -
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：>=100、<0.5、<1.5
-· 参考解要点：openssl enc -aes-256-cbc -pbkdf2 -d -pass pass:adaptive-rejection-sampler-2024 -in /protected/protected.tar.gz.enc | tar -xzf -；openssl enc -aes-256-cbc -pbkdf2 -d -pass pass:adaptive-rejection-sampler-2024 -in protected.tar.gz.enc | tar -xzf -

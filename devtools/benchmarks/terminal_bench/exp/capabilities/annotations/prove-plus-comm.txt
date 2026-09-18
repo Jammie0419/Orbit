@@ -1,8 +1,0 @@
-1. 任务本质与交付物：Fix the incomplete proof of addition commutativity in the file plus_comm.v. The file contains a partial proof that needs to be completed. The theorem states that addition is commutative for natural numbers (forall n m : 
-2. 答案/验收基线（来自 test_outputs.py）：(assert os.path.exists("plus_comm.v"), "The proof file plus_comm.v should exist")；(assert os.path.exists("plus_comm.vo"), ()；(assert "n + m = m + n" in content, ()；(assert "Proof." in content, "The file should contain a proof")；(assert "Qed." in content, "The proof should be completed with Qed")；(assert "admit" not in content, "The proof should not contain any admits")
-3. 参考解法（solve.sh 要点）：printf "Require Import Arith.；Theorem plus_comm : forall n m : nat,；n + m = m + n.
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：Theorem plus_comm : forall n m : nat,；n + m = m + n.
-
-5. 路径陷阱（必须注意）：任务初始文件在 **`/workspace/plus_comm.v`**（镜像 WORKDIR 是 `/workspace`，不是 `/app`），验证器在 `/workspace` 用**相对路径**判分（`plus_comm.v`、`plus_comm.vo`、`coqc plus_comm.v`）。必须**原地编辑** `/workspace/plus_comm.v` 并在同一目录下产出 `/workspace/plus_comm.vo`；**不要**在 `/app` 下新建副本——即便容器里 `/app` 存在，那也只是我们挂的 `/app/datasets` 数据集挂载点，不是任务工作目录。找不到文件时先 `find / -name plus_comm.v` 定位，不要在自己 cwd 里新建。

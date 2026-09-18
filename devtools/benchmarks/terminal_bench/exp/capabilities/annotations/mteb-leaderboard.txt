@@ -1,7 +1,0 @@
-1. 任务本质与交付物：I have a lot of Scandinavian texts that I need to encode. Please provide me with the name in organization/model_name format (e.g. BAAI/bge-small-en-v1.5) of the best embedding model to use according to the Scandinavian M
-   交付物路径：/app/result.txt。
-2. 答案（直接给出）：/app/result.txt 恰一行，内容必须精确等于 "GritLM/GritLM-7B"（按北欧 MTEB 榜单选出的最佳 embedding 模型名）。
-3. 参考解法（solve.sh 要点）：git clone https://github.com/embeddings-benchmark/results；git checkout c0fd3271442f8c0c839084a109fede85c8514dab；cat << 'EOF' > leaderboard.py
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 期望值（对拍用）：expected = "GritLM/GritLM-7B"

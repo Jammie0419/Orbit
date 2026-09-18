@@ -1,6 +1,0 @@
-1. 任务本质与交付物：Create a python package called vectorops, then build this package and set up a pypi server on port 8080 locally which also hosts this package. It should be possible to use the address of this server using --index-url wit
-2. 答案/验收基线（来自 test_outputs.py）：("vectorops==0.1.0",)；(print("Installing vectorops==0.1.0 from local PyPI server..."))；(assert v.dotproduct([1, 1], [0, 1]) == 1)；(assert v.dotproduct([1, 1, 0], [1, 1, 0]) == 2)；(assert v.dotproduct([1, 1, 0, 0], [1, 0, 0, 21.2]) == 1)；(assert v.dotproduct([1, -1, 0, 0.01], [0, 0, 10, 0]) == 0)
-3. 参考解法（solve.sh 要点）：DEBIAN_FRONTEND=noninteractive apt-get update；DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv apache2-utils；python3 -m venv /opt/pypiserver/venv
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：python3 -m venv /opt/pypiserver/venv；/opt/pypiserver/venv/bin/pip install pypiserver==2.3.2 passlib[bcrypt]==1.7.4 bcrypt==4.3.0 packaging==25.0；htpasswd -b -c /opt/pypiserver/.htpasswd uploader password

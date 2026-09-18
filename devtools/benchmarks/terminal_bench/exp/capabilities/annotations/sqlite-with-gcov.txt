@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Compile SQLite in /app/sqlite with gcov instrumentation and make it available in the PATH. The SQLite source snapshot is pre-vendored at /app/vendor/sqlite-fossil-release.tar.gz; use it instead of fetching sources over t
-   交付物路径：/app/sqlite。
-2. 答案/验收基线（来自 test_outputs.py）：(assert result.returncode == 0, f"SQLite execution failed: {result.stderr}")；(assert len(result.stdout.strip()) > 0, "SQLite version output is empty")；(assert sqlite_path is not None, "sqlite3 not found in PATH")；(assert result.returncode == 0, f"SQLite execution from PATH failed: {result.stderr}")；(assert result.returncode == 0, "Failed to run SQLite")；(assert len(gcda_files) > 0, ()
-3. 参考解法（solve.sh 要点）：export USER=tbench；tar -xzf /app/vendor/sqlite-fossil-release.tar.gz --strip-components=1；DEBIAN_FRONTEND=noninteractive apt-get -y install tzdata
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：tar -xzf /app/vendor/sqlite-fossil-release.tar.gz --strip-components=1；CFLAGS="-g -ftest-coverage -fprofile-arcs" ./configure --enable-fts3 --enable-session

@@ -1,6 +1,0 @@
-1. 任务本质与交付物：Configure a git server so that I can run on my computer git clone user@server:/git/server echo "hello world" > hello.html git add hello.html git commit -m "add hello.html" git push origin master And have this data then b
-2. 答案/验收基线（来自 test_outputs.py）：(assert "TEST PASSED" in result.stdout, "Did not pass test")
-3. 参考解法（solve.sh 要点）：DEBIAN_FRONTEND=noninteractive apt-get update；DEBIAN_FRONTEND=noninteractive apt-get install -y git nginx openssh-server；adduser --disabled-password --gecos 'Git Version Control' --shell /bin/bash --home /home/user user
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：adduser --disabled-password --gecos 'Git Version Control' --shell /bin/bash --home /home/user user；chown -R user:user /git；su - user -c "git init --bare /git/server"

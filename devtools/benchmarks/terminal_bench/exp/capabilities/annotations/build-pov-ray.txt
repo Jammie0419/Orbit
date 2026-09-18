@@ -1,9 +1,0 @@
-1. 任务本质与交付物：Build POV-Ray 2.2. Find and download the source archives, extract them to `/app/povray-2.2`, then compile and install to `/usr/local/bin/povray`. We will test your build by rendering `/app/deps/illum1.pov` and comparing 
-   交付物路径：/app/illum1.png, /app/illum1.tga, /app/povray-2.2。
-2. 答案/验收基线（来自 test_outputs.py）：(error_msg += f"POV-Ray exit code: {result.returncode}. ")；(assert False, error_msg)；(assert convert_result.returncode == 0, ()；(assert img.format == "PNG", f"Output file is {img.format}, expected PNG")；(assert img.size == (640, 480), ()；(assert False, f"Generated PNG is not valid: {e}")
-3. 参考解法（solve.sh 要点）：build-essential \；ncompress=5.0-1 \；&& rm -rf /var/lib/apt/lists/*
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：PNG、>0.87、<0.87
-· 产物哈希（须匹配）：0b29d7325d21399e4733e41b132e8d10、23a2f2afbdd7a37ed6b2e411da886de0、5c51d226612b105da1b8efa957e1fa31
-· 参考解要点：uncompress POVDOC.TAR.Z POVSCN.TAR.Z POVSRC.TAR.Z

@@ -1,7 +1,0 @@
-1. 任务本质与交付物：The file /app/sim.c is a logic-gate simulator: each line of the file /app/gates.txt should contain a line of the form outX = outY outX = 0/1 outX = ~outY outX = outY & outZ outX = outY | outZ outX = outY ^ outZ Initially
-   交付物路径：/app/gates.txt, /app/sim。
-2. 答案/验收基线（来自 test_outputs.py）：(assert gate_path.exists(), f"File {gate_path} does not exist")；(assert line_count < 32000, f"gates.txt has {line_count} lines, but must have fewer than 32,000 lines")；(assert False)；(assert all_passed)
-3. 参考解法（solve.sh 要点）：cat <<'EOF' > soln.py；import time；import json
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：<32000

@@ -1,7 +1,0 @@
-1. 任务本质与交付物：The file titled sequences.fasta contains the following sequences: * input: A circular input plasmid. * egfp: A linear DNA sequence encoding the egfp protein. * flag: A linear DNA sequence encoding the FLAG protein and GS
-   交付物路径：/app/primers.fasta。
-2. 答案/验收基线（来自 test_outputs.py）：(assert i != -1, "BsaI site ggtctc not found in primer")；(assert i >= 1, "Primer must have clamp of at least 1 nucleotide before BsaI site.")；(assert len(primer) >= j + 5, ()；(assert s != -1, "Forward primer must match an annealing site.")；(assert e != -1, ()；(assert 15 <= len(extra_f) <= 45, ()
-3. 参考解法（solve.sh 要点）：rc() {；tr 'atcg' 'tagc' \；| rev
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

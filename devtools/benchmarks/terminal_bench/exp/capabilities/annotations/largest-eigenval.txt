@@ -1,6 +1,0 @@
-1. 任务本质与交付物：Complete the implementation in find_dominant_eigenvalue_and_eigenvector in /app/eigen.py. "Dominant" means the eigenvalue with the largest magnitude. The input is a 2D square numpy array with real np.float64 entries, up 
-2. 答案/验收基线（来自 test_outputs.py）：(assert not np.allclose(eigenvec, 0), "eigenvector is zero")；(assert not np.isnan(eigenval), "eigenvalue is NaN")；(assert not np.isinf(eigenval), "eigenvalue is Inf")；(assert np.allclose(A @ eigenvec, eigenval * eigenvec), ()；(assert np.isclose(np.abs(eigenval), np.abs(ref_max_eigenval)), ()；(assert dt < ref_dt, f"{dt:.6f} seconds/call > {ref_dt:.6f} seconds/call")
-3. 参考解法（solve.sh 要点）：cat > /app/eigen.py << 'EOF'；import numpy as np；import eigenpy
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 无直接可抄的期望值：按第 2 条的验收口径自行推导（多为与参考实现/参考数据的比较）。

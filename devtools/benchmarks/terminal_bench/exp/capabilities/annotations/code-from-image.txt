@@ -1,7 +1,0 @@
-1. 任务本质与交付物：You're given an image of a pseudocode snippet at `/app/code.png`. Implement the intended logic of that snippet in any language and produce the same final value it would print. Write the result to `/app/output.txt`. - Hin
-   交付物路径：/app/output.txt。
-2. 答案/验收基线（来自 test_outputs.py）：(assert output_path.exists(), f"File {output_path} does not exist")；(assert output.strip().startswith("bee26a"), ()；(assert ()；(== "bee26a133f103b9ecda444c70ec22cafef6e31a3de7af6d047974dc90ce3defe")
-3. 参考解法（solve.sh 要点）：cat <<'EOF' > /app/code.py；import hashlib；def read_file_bytes(path: str) -> bytes:
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 产物哈希（须匹配）：bee26a133f103b9ecda444c70ec22cafef6e31a3de7af6d047974dc90ce3defe

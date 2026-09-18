@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Write a JSON file called /app/re.json that is a list of [regex, replacement] pairs. When executed in order with the Python code ``` def all_legal_next_positions(fen): for pattern, repl in json.load(open("/app/re.json")):
-   交付物路径：/app/re.json。
-2. 答案/验收基线（来自 test_outputs.py）：(assert x in python_chess_moves or x.rpartition(" ")[0]+" -" in python_chess_moves, ()；(assert len(our_moves) == len(python_chess_moves), ()；(assert len(open("/app/re.json").read()) < 10e6)；(assert len(json.loads(open("/app/re.json").read())) < 1e5)
-3. 参考解法（solve.sh 要点）：python -c 'import base64; open("a.gz","wb").write(base64.b64decode(open("solution.b64").read()))'；cat a.gz | gzip -d > re.json
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 参考解要点：python -c 'import base64; open("a.gz","wb").write(base64.b64decode(open("solution.b64").read()))'

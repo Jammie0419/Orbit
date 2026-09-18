@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Under /tmp/CompCert/, build the CompCert C verified compiler (version 3.13.1) from source, configuring it to the operating system and instruction set architecture of the development environment. Ensure that CompCert can 
-   交付物路径：/tmp/CompCert/ccomp。
-2. 答案/验收基线（来自 test_outputs.py）：(return p.returncode, p.stdout, p.stderr)；(assert CCOMP_PATH.exists(), f"{CCOMP_PATH} does not exist")；(assert stat.S_ISREG(st.st_mode), f"{CCOMP_PATH} is not a regular file")；(assert os.access(CCOMP_PATH, os.X_OK), f"{CCOMP_PATH} is not executable")；(assert rc_version == 0, f"Failed to get ccomp version: {err_version}")；(assert "3.13" in version_output, ()
-3. 参考解法（solve.sh 要点）：opam \；build-essential \；unzip \
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 判分边界：Hello CompCert:\n

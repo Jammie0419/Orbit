@@ -1,7 +1,0 @@
-1. 任务本质与交付物：Set up an Nginx web server with advanced request logging and custom configurations. Your task is to: 1. Install Nginx web server 2. Configure the server to: - Listen on port 8080 - Serve static files from /var/www/html -
-2. 答案/验收基线（来自 test_outputs.py）：(assert result.returncode == 0, "Nginx is not installed")；(assert response.status_code == 200, ()；(assert False, "Nginx is not running on port 8080")；(assert response.status_code == 200, "Could not access the index page")；(assert content == expected_content, ()；(assert response.status_code == 404, "Expected 404 status code for nonexistent page")
-3. 参考解法（solve.sh 要点）：NGINX_CONF="/etc/nginx/nginx.conf"；if ! grep -q "log_format detailed" $NGINX_CONF; then；sed -i '/http {/a \    log_format detailed '"'"'$time_local | $request_method | $status | "$http_user_agent"'"'"';' $NGINX_CONF
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 期望值（对拍用）：expected_content = "Welcome to the benchmark webserver"
-· 参考解要点：NGINX_CONF="/etc/nginx/nginx.conf"

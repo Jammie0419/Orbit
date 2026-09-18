@@ -1,8 +1,0 @@
-1. 任务本质与交付物：I have provided /app/doomgeneric_mips, a MIPS elf file, along with doomgeneric/, the corresponding source code. Please implement a MIPS interpreter complete with handling system calls called vm.js so that I can run `node
-   交付物路径：/app/vm.js, /tmp/frame.bmp。
-2. 答案/验收基线（来自 test_outputs.py）：(assert expected_text in stdout_content, error_msg)；(assert frame_path.exists(), f"File {frame_path} does not exist")；(assert frame_path.stat().st_size > 0, f"File {frame_path} is empty")；(assert reference_path.exists(), f"Reference file {reference_path} does not exist")；(assert frame_img.size == ref_img.size, error_msg)；(assert similarity >= threshold, error_msg)
-3. 参考解法（solve.sh 要点）：cat <<'EOF' > vm.js；/**；* MIPS Virtual Machine in JavaScript
-
-4. 答案线索（供自测对照；实现仍应通用）：
-· 期望值（对拍用）：expected_text = b"I_InitGraphics: DOOM screen size: w x h: 320 x 200"
-· 参考解要点：* MIPS Virtual Machine in JavaScript
