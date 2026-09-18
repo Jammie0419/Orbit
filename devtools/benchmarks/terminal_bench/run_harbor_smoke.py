@@ -37,6 +37,29 @@ from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mo
 AGENT_IMPORT = "devtools.benchmarks.terminal_bench.harbor_installed_agent:OuroborosTerminalBenchAgent"
 
 
+def find_local_task_path(task_name: str) -> pathlib.Path | None:
+    """Find the local cached task directory for a given task name.
+    
+    Returns the path to the most recent version of the task in the local cache,
+    or None if not found.
+    """
+    # Extract the bare task name (remove org prefix if present)
+    bare_name = task_name.rsplit("/", 1)[-1] if "/" in task_name else task_name
+    
+    cache_dir = pathlib.Path.home() / ".cache/harbor/tasks/packages/terminal-bench"
+    task_dir = cache_dir / bare_name
+    
+    if not task_dir.exists():
+        return None
+    
+    # Find the most recent version (sha directory)
+    versions = sorted(task_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
+    if not versions:
+        return None
+    
+    return versions[0]
+
+
 def harbor_command(
     *,
     task_names: list[str],
@@ -58,27 +81,60 @@ def harbor_command(
     # Keep the light model pinned to the main model by default; v6.27.0 otherwise
     # defaults it to google/gemini-3.5-flash, which would diverge from a pure-model run.
     effective_light_model = light_model or model
-    cmd = [
-        harbor_bin,
-        "run",
-        "--dataset",
-        dataset,
-        "--agent-import-path",
-        AGENT_IMPORT,
-        "--model",
-        f"ouroboros-{model.replace('/', '-')}",
-        "--agent-kwarg",
-        f"ouroboros_model={model}",
-        "--agent-kwarg",
-        f"ouroboros_light_model={effective_light_model}",
-        "--agent-kwarg",
-        "install_timeout_sec=1200",
-        "--agent-kwarg",
-        "server_start_timeout_sec=240",
-        # Dataset identity for the adapter's per-task cache lookup (org is not a constant).
-        "--agent-kwarg",
-        f"dataset={dataset}",
-    ]
+    
+    # Try to use local task cache to avoid connecting to remote registry
+    local_paths = []
+    for task_name in task_names:
+        local_path = find_local_task_path(task_name)
+        if local_path:
+            local_paths.append((task_name, local_path))
+    
+    # Determine if we can use local paths for all tasks
+    use_local = len(local_paths) == len(task_names) and len(local_paths) > 0
+    
+    if use_local:
+        # Use --path for each task (local cache mode)
+        cmd = [
+            harbor_bin,
+            "run",
+            "--agent-import-path",
+            AGENT_IMPORT,
+            "--model",
+            f"ouroboros-{model.replace('/', '-')}",
+            "--agent-kwarg",
+            f"ouroboros_model={model}",
+            "--agent-kwarg",
+            f"ouroboros_light_model={effective_light_model}",
+            "--agent-kwarg",
+            "install_timeout_sec=1200",
+            "--agent-kwarg",
+            "server_start_timeout_sec=240",
+            "--agent-kwarg",
+            f"dataset={dataset}",
+        ]
+    else:
+        # Use --dataset with remote registry (fallback)
+        cmd = [
+            harbor_bin,
+            "run",
+            "--dataset",
+            dataset,
+            "--agent-import-path",
+            AGENT_IMPORT,
+            "--model",
+            f"ouroboros-{model.replace('/', '-')}",
+            "--agent-kwarg",
+            f"ouroboros_model={model}",
+            "--agent-kwarg",
+            f"ouroboros_light_model={effective_light_model}",
+            "--agent-kwarg",
+            "install_timeout_sec=1200",
+            "--agent-kwarg",
+            "server_start_timeout_sec=240",
+            # Dataset identity for the adapter's per-task cache lookup (org is not a constant).
+            "--agent-kwarg",
+            f"dataset={dataset}",
+        ]
     if host_settings_path:
         cmd.extend(["--agent-kwarg", f"host_settings_path={host_settings_path}"])
     cmd.extend(
@@ -98,8 +154,20 @@ def harbor_command(
             "--yes",
         ]
     )
-    for task_name in task_names:
-        cmd.extend(["--include-task-name", task_name])
+    # Use local registry to avoid connecting to remote Supabase registry
+    local_registry = pathlib.Path.home() / ".cache/harbor/local_registry.json"
+    if local_registry.exists() and not use_local:
+        cmd.extend(["--registry-path", str(local_registry)])
+    
+    # Add task specifications based on mode
+    if use_local:
+        # Use --path for each task
+        for task_name, local_path in local_paths:
+            cmd.extend(["--path", str(local_path)])
+    else:
+        # Use --include-task-name for remote registry
+        for task_name in task_names:
+            cmd.extend(["--include-task-name", task_name])
     # Host cache mounts (pip/uv wheels, apt debs + index, HF artifacts). Smoke mode used to
     # emit NONE, so every trial re-downloaded ~200MB of large wheels inside harbor's 360s
     # agent-setup budget and routinely died with AgentSetupTimeoutError. The mount set is
