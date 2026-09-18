@@ -1030,7 +1030,41 @@ PY
             )
 
     async def _resolve_workspace_dir(self, environment: BaseEnvironment) -> None:
-        """Use /app when present, but support tasks whose Dockerfile uses /workspace."""
+        """Pick the agent's active workspace.
+
+        The image's WORKDIR is the task author's intent — this is the directory
+        the verifier runs in, and where task-provided files live. Read it via
+        ``readlink /proc/1/cwd`` inside the container: PID 1 keeps the image's
+        ``WorkingDir`` as its cwd, so this probe works regardless of whether
+        ``docker inspect`` is reachable from inside the container.
+
+        Fall back to the old ``/app`` (or ``/workspace``) heuristic only when
+        the probe fails — that preserves the behavior for the bulk of tasks
+        (86/89 of the dataset uses WORKDIR=/app) while fixing the handful of
+        tasks whose image WORKDIR'd elsewhere. Without this, tasks like
+        ``prove-plus-comm`` (WORKDIR=/workspace) end up with ``/app`` as the
+        workspace because our ``/app/datasets`` bind-mount happens to *create*
+        ``/app``, defeating the old "use /workspace only if /app is missing"
+        fallback and forcing the agent to work in a phantom directory.
+        """
+        probe = await environment.exec(
+            command="readlink /proc/1/cwd 2>/dev/null",
+            timeout_sec=10,
+        )
+        image_workdir = probe.stdout.strip() if probe.return_code == 0 else ""
+        if image_workdir:
+            check = await environment.exec(
+                command=f"test -d {shlex.quote(image_workdir)}",
+                timeout_sec=10,
+            )
+            if check.return_code == 0 and image_workdir != self.workspace_dir:
+                self.workspace_dir = image_workdir
+                await self._append_log(
+                    environment,
+                    f"workspace: using image WORKDIR {image_workdir} (via readlink /proc/1/cwd)",
+                )
+                return
+
         requested = self.workspace_dir
         quoted_requested = shlex.quote(requested)
         result = await environment.exec(command=f"test -d {quoted_requested}", timeout_sec=10)
