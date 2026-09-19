@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -245,39 +246,102 @@ _UV_BOOTSTRAP_BLOCK = _TEST_SH_MIRROR_BLOCK
 # idempotence check and the writer must agree on the exact string.
 _TEST_SH_INJECTED_MARKER = "# Injected by harbor_installed_agent.py for China network"
 
+# Marks a test.sh as already carrying the apt lock shim, and is a SEPARATE key from the
+# block marker on purpose: the block marker went out in the first rollout, so the 19 task
+# packages that already carry it would never receive anything appended to the block
+# afterwards. Keying the shim on its own marker is what lets an already-patched test.sh
+# pick the shim up.
+_APT_SHIM_MARKER = "# Injected by harbor_installed_agent.py: apt lock shim"
+
+# The verifier's apt calls are NOT ours to wrap, so the lock is taken at the apt entry
+# point instead of at a phase boundary. Measured 2026-09-18: two verifier runs died in
+# 1.87 s and 3.24 s with "Could not get lock /var/lib/apt/lists/lock. It is held by
+# process 0" -- that PID is unresolvable because the holder sits in another container's
+# PID namespace, and the task's own `set -e` turned the warning into an instant zero
+# (the results were never graded; one trial had run 38 turns of correct work). apt
+# cannot be asked to wait for its own lock: libapt-pkg 2.8.3 knows only
+# DPkg::Lock::Timeout, which guards dpkg's lock, not Dir::State::lists. So the shim
+# queues at the call site. /usr/local/bin precedes /usr/bin in the container PATH for
+# both `bash -lc` and `sh -c` (measured), which is what makes it catch a bare
+# `apt-get` from four different callers: our own install, the task's test.sh, the
+# verify.sh that test.sh generates inside pytest, and the agent typing
+# `apt-get install ...` mid-task. Every failure path is fail-open (no flock, unwritable
+# lock file, or a timed-out wait all fall through to the real binary), so the worst case
+# is exactly today's behavior. It is a no-op on images without apt-get (apk/yum).
+_APT_SHIM_BLOCK = r'''# Injected by harbor_installed_agent.py: apt lock shim
+if [ -x /usr/bin/apt-get ] && command -v flock >/dev/null 2>&1; then
+  mkdir -p /usr/local/bin 2>/dev/null || true
+  for OUP in apt-get apt; do
+    [ -x "/usr/bin/$OUP" ] || continue
+    if [ -e "/usr/local/bin/$OUP" ]; then continue; fi
+    cat > "/usr/local/bin/$OUP" <<'OURO_APT_SHIM' || true
+#!/bin/sh
+# Serialize apt across containers. /var/lib/apt/lists and /var/cache/apt are shared
+# bind mounts, so apt's own lock files in them are global, and apt has no way to be
+# told to wait for them (see the calling block for the measurement).
+self=$(basename "$0")
+if [ -z "${OURO_APT_LOCK_HELD:-}" ] && command -v flock >/dev/null 2>&1; then
+  mkdir -p /var/cache/apt 2>/dev/null || true
+  if exec 9>/var/cache/apt/.apt-phase.lock; then
+    flock -w "${OURO_APT_LOCK_WAIT:-300}" 9 2>/dev/null || :
+  fi
+fi
+exec "/usr/bin/$self" "$@"
+OURO_APT_SHIM
+    chmod 755 "/usr/local/bin/$OUP" 2>/dev/null || true
+  done
+fi'''
+
 
 def _inject_test_sh_mirror_block(text: str) -> str | None:
-    """Return test.sh with the mirror bootstrap block injected, or None when the
-    file is already patched (idempotent). The original uv install line is kept
-    (harmless: the block above already ensures uv exists, and the astral curl is
-    gated by UV_ALREADY_AVAILABLE via the surrounding `||` guard below)."""
-    # Idempotence is keyed on OUR marker, not on "UV_INDEX_URL". Task packages in this
+    """Return test.sh with the CN bootstrap block and the apt lock shim injected, or
+    None when both are already present (idempotent).
+
+    The two are injected on independent keys, so a test.sh that carries only the older
+    block still receives the shim. The original uv install line is kept (harmless: the
+    block above already ensures uv exists, and the astral curl is gated by
+    UV_ALREADY_AVAILABLE via the surrounding `||` guard below)."""
+    # Idempotence is keyed on OUR markers, not on "UV_INDEX_URL". Task packages in this
     # cache have been edited to set UV_INDEX_URL themselves, so testing for that string
     # returned None ("already patched") on exactly the files that most need the block --
     # the injection silently did nothing and the verifier ran with no PATH to uvx.
-    if _TEST_SH_INJECTED_MARKER in text:
+    need_block = _TEST_SH_INJECTED_MARKER not in text
+    need_shim = _APT_SHIM_MARKER not in text
+    if not (need_block or need_shim):
         return None
     lines = text.splitlines()
     if lines and lines[0].startswith("#!"):
         head, rest = lines[0], lines[1:]
-        new_lines = [head, _TEST_SH_INJECTED_MARKER]
-        new_lines.extend(_TEST_SH_MIRROR_BLOCK.rstrip("\n").splitlines())
-        new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
-        gated = []
-        for line in rest:
-            if line.strip().startswith("curl -LsSf https://astral.sh/uv/") and "install.sh" in line:
-                stmt = line.strip()
-                # bash `{ list; }` needs a command terminator before `}` so the
-                # gated original install line stays a valid brace group.
-                gated.append(f'[ -n "$UV_ALREADY_AVAILABLE" ] || {{ {stmt}; }}')
-            else:
-                gated.append(line)
-        new_lines.extend(gated)
+        new_lines = [head]
+        if need_block:
+            new_lines.append(_TEST_SH_INJECTED_MARKER)
+            new_lines.extend(_TEST_SH_MIRROR_BLOCK.rstrip("\n").splitlines())
+            new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
+            gated = []
+            for line in rest:
+                if line.strip().startswith("curl -LsSf https://astral.sh/uv/") and "install.sh" in line:
+                    stmt = line.strip()
+                    # bash `{ list; }` needs a command terminator before `}` so the
+                    # gated original install line stays a valid brace group.
+                    gated.append(f'[ -n "$UV_ALREADY_AVAILABLE" ] || {{ {stmt}; }}')
+                else:
+                    gated.append(line)
+            rest = gated
+        if need_shim:
+            new_lines.extend(_APT_SHIM_BLOCK.rstrip("\n").splitlines())
+        new_lines.extend(rest)
         return "\n".join(new_lines) + "\n"
     if text.startswith("#!/"):
         return None  # not a shebang we understand; leave untouched
-    # No shebang at all: prepend the block (rare; some tasks ship a plain script).
-    return _TEST_SH_MIRROR_BLOCK + text
+    # No shebang at all: prepend whichever piece is missing (rare; some tasks ship a
+    # plain script). The marker line travels with the block here too -- without it the
+    # next call cannot tell the block was already prepended and would add a second copy.
+    prefix = ""
+    if need_block:
+        prefix += f"{_TEST_SH_INJECTED_MARKER}\n{_TEST_SH_MIRROR_BLOCK}"
+    if need_shim:
+        prefix += _APT_SHIM_BLOCK + "\n"
+    return prefix + text
 
 
 def _copy_clean_source(source: Path, target: Path) -> None:
@@ -549,6 +613,27 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
         if not blocked and not any(key in env for key in _SECRET_ENV_KEYS):
             return
 
+    def _task_annotation_effort(self) -> str | None:
+        """Per-task reasoning-effort override declared in the task's annotation file.
+
+        A line ``reasoning-effort: <level>`` (``reasoning_effort`` accepted too) in the
+        annotation body lets ONE task run a different thinking budget than the rest of
+        the suite — measured on gpt2-codegolf, whose 900s window died on round-1
+        reasoning more than on solution quality while the other 88 tasks keep their
+        configured effort. The explicit ``--agent-kwarg reasoning_effort=...`` wins
+        when present; annotation directives never override it.
+        """
+        try:
+            from devtools.benchmarks.terminal_bench.exp.capabilities import task_annotations as _ann
+            if not _ann.annotations_enabled():
+                return None
+            task_name = _task_name_from_trial_dir(self.logs_dir)
+            body = _ann.TASK_ANNOTATIONS.get(task_name) or ""
+        except Exception:  # best-effort only — degrade to the configured effort
+            return None
+        m = re.search(r"(?m)^\s*reasoning[-_]effort\s*:\s*([a-zA-Z]+)\s*$", body)
+        return m.group(1).lower() if m else None
+
     def _container_env(self) -> dict[str, str]:
         settings = self._host_settings()
         allow_secrets = self._container_secret_injection_allowed(settings)
@@ -623,6 +708,14 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
             env["OUROBOROS_MODEL_LIGHT"] = self.ouroboros_light_model
         if self.reasoning_effort:
             env["OUROBOROS_EFFORT_TASK"] = self.reasoning_effort
+        else:
+            # Per-task override declared inside the task's own annotation file
+            # (``reasoning-effort: low``). One task can run a different thinking
+            # budget than the rest of the suite without a per-run kwarg; the
+            # explicit --agent-kwarg reasoning_effort=... still wins when present.
+            ann_effort = self._task_annotation_effort()
+            if ann_effort:
+                env["OUROBOROS_EFFORT_TASK"] = ann_effort
 
         # Pin the fallback to the EFFECTIVE main model: the container has no
         # settings.json, so leaving the key unset resurrects the
@@ -716,6 +809,11 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
               # 兼容 deb822（ubuntu.sources）和 legacy（sources.list）两种格式。
               if command -v apt-get >/dev/null 2>&1; then
                 export DEBIAN_FRONTEND=noninteractive
+                # Install the apt lock shim BEFORE any apt runs. It serializes every
+                # apt call in the container against the other containers through the
+                # shared mounts; see _APT_SHIM_BLOCK for why the lock belongs at the
+                # call site rather than around this phase.
+                {_APT_SHIM_BLOCK}
                 # Neutralize docker-clean BEFORE any apt work. Debian/Ubuntu images ship
                 # /etc/apt/apt.conf.d/docker-clean, whose DPkg::Post-Invoke and
                 # APT::Update::Post-Invoke hooks `rm -f /var/cache/apt/archives/*.deb`.
@@ -754,30 +852,82 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
                 #   * the CN mirror does not tolerate parallel streams: with 3 trials
                 #     installing at once, 1 in 3 died even WITH retries ("Unable to
                 #     connect to mirrors.tuna.tsinghua.edu.cn"); 5-way lost 2 of 5.
-                # So the apt phase is serialized behind one flock; because the lock file
-                # lives on the shared mount it coordinates across containers. Only the
-                # ~40s/trial install queues up -- the AI work that follows stays parallel.
+                # The serialization now lives in the shim installed above rather than in
+                # a flock around this phase (2026-09-18). A phase-level lock here could
+                # only ever cover OUR apt call, and the two zeros it cost came from the
+                # VERIFIER's apt -- the task's verify.sh is generated inside pytest, so
+                # there is no boundary to wrap, and the loser of the race dies in under
+                # two seconds because that script starts with `set -e`. The shim takes
+                # the same lock file per invocation, so this install phase, every
+                # verifier, and any `apt-get` the agent types mid-task all queue on one
+                # lock, and a slow install delays a verifier instead of racing it.
                 for d in /var/cache/apt /var/cache/apt/archives /var/cache/apt/archives/partial \
                          /var/lib/apt/lists /var/lib/apt/lists/partial; do
                   mkdir -p "$d" 2>/dev/null || true
                   chmod 777 "$d" 2>/dev/null || true
                 done
-                exec 9>/var/cache/apt/.apt-phase.lock || true
-                flock -w 900 9 || echo "install: apt lock wait timed out; proceeding"
                 APT_OK=0
-                for attempt in 1 2 3; do
+                for attempt in 1 2; do
                   if apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 update \
                      && apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 -o Binary::apt::APT::Keep-Downloaded-Packages=true install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip; then
                     APT_OK=1
                     break
                   fi
-                  echo "install: apt attempt $attempt/3 failed; retrying in $((attempt * 10))s"
+                  echo "install: apt attempt $attempt/2 failed; retrying in $((attempt * 10))s"
                   sleep $((attempt * 10))
                 done
-                exec 9>&-
                 if [ "$APT_OK" != "1" ]; then
-                  echo "install: apt-get update+install failed after 3 attempts"
-                  exit 1
+                  # --- degraded mode ---------------------------------------------------
+                  # Measured 2026-09-18 on debian:bullseye-slim: bullseye LTS ended
+                  # 2026-08-31, the bullseye-security INDEX is still published (so apt
+                  # resolves every security-updated package to it) but its POOL is gone --
+                  # 57/57 fetches 404 on tuna AND on security.debian.org, and because apt
+                  # is transactional git and curl went down with python3-venv. Five
+                  # trials of one task died here before ever starting the agent.
+                  #
+                  # The image itself was built from a snapshot.debian.org timestamp (this
+                  # one ships it as a commented-out source), and that snapshot still has
+                  # every file at exactly the versions the image's packages were built
+                  # against -- so re-point the withdrawn suite there. A years-old
+                  # snapshot needs Acquire::Check-Valid-Until=false, written to
+                  # apt.conf.d so the agent's and the verifier's later apt calls inherit
+                  # it. Without a shipped timestamp, fall back to pinning the security
+                  # suites out and accepting base-pool versions (best effort: an image
+                  # whose baked packages are newer than the base pool can then have
+                  # uninstallable extras, which the uv venv path below does not need).
+                  # `|| true` is load-bearing: the *.list/*.sources globs can match
+                  # nothing, grep then exits 2, and under `set -euo pipefail` that would
+                  # abort the whole install right here. The pattern deliberately omits
+                  # the scheme: in ERE a backslash-question-mark is a LITERAL question
+                  # mark, not an optional quantifier (it matched nothing for an hour),
+                  # and this block is a non-raw f-string that cannot carry one anyway.
+                  # http:// is prepended at the substitution instead.
+                  _ouro_snap="$(grep -hsoE 'snapshot\\.debian\\.org/archive/debian-security/[0-9TZ]+' \
+                      /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null | head -1 || true)"
+                  if [ -n "$_ouro_snap" ]; then
+                    echo "install: re-pointing the security suite at the image's build snapshot $_ouro_snap"
+                    sed -i -E "s#https?://[^ ]*/debian-security#http://$_ouro_snap#g" \
+                        /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+                    printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99-ouroboros-snapshot || true
+                  else
+                    echo "install: no build snapshot known; pinning the *-security suites out (base-pool versions)"
+                    printf 'Package: *\nPin: release n=*security*\nPin-Priority: -1\n' > /etc/apt/preferences.d/ouroboros-drop-security || true
+                  fi
+                  if apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 -o Acquire::Check-Valid-Until=false update \
+                     && apt-get -o APT::Sandbox::User=root -o Acquire::Retries=3 -o Binary::apt::APT::Keep-Downloaded-Packages=true install -y --no-install-recommends git curl bash ca-certificates procps python3 python3-venv python3-pip; then
+                    APT_OK=1
+                  fi
+                fi
+                if [ "$APT_OK" != "1" ]; then
+                  # A failed apt is only fatal when it leaves us without a tool every
+                  # later step needs; anything else degrades to a warning.
+                  for _ouro_tool in git curl python3; do
+                    if ! command -v "$_ouro_tool" >/dev/null 2>&1; then
+                      echo "install: apt could not provide $_ouro_tool, which the runtime requires"
+                      exit 1
+                    fi
+                  done
+                  echo "install: apt failed but every required tool is present; continuing"
                 fi
               elif command -v apk >/dev/null 2>&1; then
                 apk add --no-cache git curl bash ca-certificates procps python3 py3-pip py3-virtualenv
@@ -992,8 +1142,14 @@ PY
 
     async def _patch_test_sh_in_container(self, environment: BaseEnvironment) -> None:
         """Patch /tests/test.sh inside the task container (shared-verifier belt)."""
-        # The injected block is baked into the heredoc by the HOST (single source:
-        # _TEST_SH_MIRROR_BLOCK), so the container python needs no repo import.
+        # Both pieces and both markers are baked into the heredoc by the HOST (single
+        # source: _TEST_SH_MIRROR_BLOCK / _APT_SHIM_BLOCK), so the container python needs
+        # no repo import. They travel as ARGUMENTS rather than as names interpolated into
+        # the python source: the previous version wrote the bare identifier
+        # _TEST_SH_INJECTED_MARKER into the container-side script, which is a NameError,
+        # so this fallback path could never patch anything -- it only looked healthy
+        # because the host-cache path usually got there first and this one then exited
+        # early.
         patch_cmd = (
             textwrap.dedent(
                 """
@@ -1004,29 +1160,41 @@ PY
                     exit 0
                 fi
                 BLOCK='@@MIRROR_BLOCK@@'
-                python3 - "$TEST_SH" "$BLOCK" <<'PY'
+                SHIM='@@SHIM_BLOCK@@'
+                BLOCK_MARKER='@@BLOCK_MARKER@@'
+                SHIM_MARKER='@@SHIM_MARKER@@'
+                python3 - "$TEST_SH" "$BLOCK" "$SHIM" "$BLOCK_MARKER" "$SHIM_MARKER" <<'PY'
                 import sys
                 from pathlib import Path
 
                 path = Path(sys.argv[1])
-                block = sys.argv[2]
+                block, shim = sys.argv[2], sys.argv[3]
+                block_marker, shim_marker = sys.argv[4], sys.argv[5]
                 text = path.read_text(encoding="utf-8")
-                if "UV_INDEX_URL" in text:
+                need_block = block_marker not in text
+                need_shim = shim_marker not in text
+                if not (need_block or need_shim):
                     print("patch: in-container test.sh already patched")
                     raise SystemExit(0)
                 lines = text.splitlines()
                 if lines and lines[0].startswith("#!"):
                     head, rest = lines[0], lines[1:]
-                    new_lines = [head, _TEST_SH_INJECTED_MARKER]
-                    new_lines.extend(block.rstrip("\\n").splitlines())
-                    new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
-                    for line in rest:
-                        if line.strip().startswith("curl -LsSf https://astral.sh/uv/") and "install.sh" in line:
-                            stmt = line.strip()
-                            # bash `{ list; }` needs a terminator before `}`.
-                            new_lines.append('[ -n "$UV_ALREADY_AVAILABLE" ] || { ' + stmt + "; }")
-                        else:
-                            new_lines.append(line)
+                    new_lines = [head]
+                    if need_block:
+                        new_lines.append(block_marker)
+                        new_lines.extend(block.rstrip("\\n").splitlines())
+                        new_lines.append("# Gate the original uv install line (uv already bootstrapped above):")
+                        for line in rest:
+                            if line.strip().startswith("curl -LsSf https://astral.sh/uv/") and "install.sh" in line:
+                                stmt = line.strip()
+                                # bash `{ list; }` needs a terminator before `}`.
+                                new_lines.append('[ -n "$UV_ALREADY_AVAILABLE" ] || { ' + stmt + "; }")
+                            else:
+                                new_lines.append(line)
+                    else:
+                        new_lines.extend(rest)
+                    if need_shim:
+                        new_lines.extend(shim.rstrip("\\n").splitlines())
                     path.write_text("\\n".join(new_lines) + "\\n", encoding="utf-8")
                     path.chmod(0o755)
                     print("patch: in-container test.sh updated")
@@ -1034,6 +1202,9 @@ PY
                 """
             )
             .replace("@@MIRROR_BLOCK@@", _TEST_SH_MIRROR_BLOCK.replace("'", "'\\''"))
+            .replace("@@SHIM_BLOCK@@", _APT_SHIM_BLOCK.replace("'", "'\\''"))
+            .replace("@@BLOCK_MARKER@@", _TEST_SH_INJECTED_MARKER.replace("'", "'\\''"))
+            .replace("@@SHIM_MARKER@@", _APT_SHIM_MARKER.replace("'", "'\\''"))
             .strip()
         )
 
@@ -1726,6 +1897,8 @@ PY
         # "<taskhash>__<hash>", which resolves to nothing and silently drops the annotation.
         task_name = _task_name_from_trial_dir(self.logs_dir)
         rendered = _ann.render_task_annotations(task_name)
+        # The effort directive is adapter config, not model-facing text.
+        rendered = re.sub(r"(?m)^\s*reasoning[-_]effort\s*:.*$\n?", "", rendered)
         return f"{instruction}\n\n{rendered}" if rendered else instruction
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
