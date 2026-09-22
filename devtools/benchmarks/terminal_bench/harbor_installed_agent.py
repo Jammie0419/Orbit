@@ -156,6 +156,10 @@ _TEST_SH_MIRROR_BLOCK = """export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.c
 # there is not ours to pin.
 export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export UV_PYTHON_INSTALL_MIRROR="https://cdn.npmmirror.com/binaries/python-build-standalone"
+# huggingface.co is blocked in CN; hf-mirror mirrors the hub AND the raw
+# `resolve/` file paths (e.g. reshard-c4-data's verifier load_dataset()s
+# allenai/c4 shard 00009 at test time — that file is NOT in the shared HF cache).
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 # Prefer an already-installed uv over downloading from GitHub (blocked in CN).
 # Each candidate must pass a `--version` smoke test: a truncated download leaves
 # a corrupt uv/uvx that `command -v` still finds yet segfaults on run.
@@ -293,6 +297,27 @@ OURO_APT_SHIM
 fi'''
 
 
+def _ghproxy_github_urls(text: str) -> str:
+    """Rewrite plain https://github.com/... URLs to the gh-proxy mirror.
+
+    Direct `.../raw/...` (which redirects to raw.githubusercontent) and release
+    assets are blocked in CN — measured: sam-cell-seg's verifier curls
+    github.com/.../raw/.../mobile_sam.pt for the weight and dies direct, while
+    the same URL through gh-proxy returns 206. gh-proxy is already the mirror
+    block's uv channel. Lines that mention gh-proxy are left alone, so the
+    transform is idempotent.
+    """
+    out = []
+    for line in text.splitlines(keepends=True):
+        if "gh-proxy.com" in line:
+            out.append(line)
+        else:
+            out.append(line.replace(
+                "https://github.com/", "https://gh-proxy.com/https://github.com/"
+            ))
+    return "".join(out)
+
+
 def _inject_test_sh_mirror_block(text: str) -> str | None:
     """Return test.sh with the CN bootstrap block and the apt lock shim injected, or
     None when both are already present (idempotent).
@@ -308,7 +333,10 @@ def _inject_test_sh_mirror_block(text: str) -> str | None:
     need_block = _TEST_SH_INJECTED_MARKER not in text
     need_shim = _APT_SHIM_MARKER not in text
     if not (need_block or need_shim):
-        return None
+        # Markers in place, but the github rewrite still applies to the task's own
+        # lines (a file patched by an older run carries no gh-proxy coverage yet).
+        rewritten = _ghproxy_github_urls(text)
+        return rewritten if rewritten != text else None
     lines = text.splitlines()
     if lines and lines[0].startswith("#!"):
         head, rest = lines[0], lines[1:]
@@ -330,7 +358,7 @@ def _inject_test_sh_mirror_block(text: str) -> str | None:
         if need_shim:
             new_lines.extend(_APT_SHIM_BLOCK.rstrip("\n").splitlines())
         new_lines.extend(rest)
-        return "\n".join(new_lines) + "\n"
+        return _ghproxy_github_urls("\n".join(new_lines) + "\n")
     if text.startswith("#!/"):
         return None  # not a shebang we understand; leave untouched
     # No shebang at all: prepend whichever piece is missing (rare; some tasks ship a
@@ -341,7 +369,7 @@ def _inject_test_sh_mirror_block(text: str) -> str | None:
         prefix += f"{_TEST_SH_INJECTED_MARKER}\n{_TEST_SH_MIRROR_BLOCK}"
     if need_shim:
         prefix += _APT_SHIM_BLOCK + "\n"
-    return prefix + text
+    return _ghproxy_github_urls(prefix + text)
 
 
 def _copy_clean_source(source: Path, target: Path) -> None:
@@ -716,6 +744,19 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
             ann_effort = self._task_annotation_effort()
             if ann_effort:
                 env["OUROBOROS_EFFORT_TASK"] = ann_effort
+
+        # Agent-phase pip mirrors the verifier's test.sh: the install shell already
+        # writes /root/.pip/pip.conf (file-level TUNA), but env wins over pip.conf
+        # for every consumer and covers tools that only read environment. Host
+        # value overrides, matching test.sh's ${PIP_INDEX_URL:-...} semantics.
+        env["PIP_INDEX_URL"] = os.environ.get("PIP_INDEX_URL") or "https://pypi.tuna.tsinghua.edu.cn/simple"
+        env["PIP_TRUSTED_HOST"] = os.environ.get("PIP_TRUSTED_HOST") or "pypi.tuna.tsinghua.edu.cn"
+        # Same story for Hugging Face on the agent side: hf.co is blocked in CN,
+        # hf-mirror carries the hub + resolve/ files. huggingface_hub reads the
+        # endpoint at IMPORT time, so having it in the process env (not just a
+        # per-snippet os.environ patch) is what actually makes it stick. Host
+        # value overrides, same pattern as PIP_INDEX_URL.
+        env["HF_ENDPOINT"] = os.environ.get("HF_ENDPOINT") or "https://hf-mirror.com"
 
         # Pin the fallback to the EFFECTIVE main model: the container has no
         # settings.json, so leaving the key unset resurrects the
@@ -1195,7 +1236,16 @@ PY
                         new_lines.extend(rest)
                     if need_shim:
                         new_lines.extend(shim.rstrip("\\n").splitlines())
-                    path.write_text("\\n".join(new_lines) + "\\n", encoding="utf-8")
+                    content = "\\n".join(new_lines) + "\\n"
+                    # github -> gh-proxy (direct raw/release assets are blocked in CN);
+                    # lines already carrying gh-proxy are left alone, so re-patching is a no-op.
+                    content = "".join(
+                        ln if "gh-proxy" in ln else ln.replace(
+                            "https://github.com/", "https://gh-proxy.com/https://github.com/"
+                        )
+                        for ln in content.splitlines(keepends=True)
+                    )
+                    path.write_text(content, encoding="utf-8")
                     path.chmod(0o755)
                     print("patch: in-container test.sh updated")
                 PY
@@ -1923,6 +1973,29 @@ PY
         await environment.upload_file(self.logs_dir / "instruction.txt", "/logs/agent/instruction.txt")
 
         env = self._container_env()
+
+        # Global github rewrite -> gh-proxy: one git config in /root/.gitconfig covers
+        # BOTH the agent's own clones (build-cython-ext's instruction demands one) and
+        # the verifier's on-the-fly clones (fix-ocaml-gc re-clones a clean testsuite) —
+        # the same channel the injected test.sh already uses to fetch uv. Idempotent;
+        # images without git skip silently. Best effort: a failure must never block
+        # the trial (direct github still works when gh-proxy is down, and vice versa).
+        try:
+            git_rewrite = await environment.exec(
+                command=(
+                    "command -v git >/dev/null 2>&1 || exit 0\n"
+                    'git config --global --get url."https://gh-proxy.com/https://github.com/".insteadOf >/dev/null 2>&1 && exit 0\n'
+                    'git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"\n'
+                ),
+                user="root",
+                timeout_sec=15,
+            )
+            if getattr(git_rewrite, "return_code", 0) not in (0, None):
+                log.warning("git gh-proxy rewrite returned %s: %s",
+                            git_rewrite.return_code, getattr(git_rewrite, "stderr", ""))
+        except Exception as exc:
+            log.warning("git gh-proxy rewrite skipped: %s", exc)
+
         reached_terminal_result = False
         try:
             self._enforce_container_secret_policy(env)

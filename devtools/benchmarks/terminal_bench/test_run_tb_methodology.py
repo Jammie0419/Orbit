@@ -73,7 +73,14 @@ def test_allow_agent_web_flips_kwarg(tmp_path):
 
 
 def test_pip_cache_mount_is_env_opt_in(monkeypatch, tmp_path):
-    monkeypatch.delenv("OBO_TB_PIP_CACHE", raising=False)
+    # Leak-proof: a shell that sourced .env.terminal_bench.linux exports all four
+    # cache vars, and pytest would otherwise assert against a mounts list that
+    # also carries the other three.
+    for _var in (
+        "OBO_TB_PIP_CACHE", "OBO_TB_APT_CACHE",
+        "OBO_TB_HF_CACHE", "OBO_TB_PREFETCH_CACHE",
+    ):
+        monkeypatch.delenv(_var, raising=False)
     assert "--mounts" not in run_tb.harbor_command(_cfg())
 
     cache = tmp_path / "pip-cache"
@@ -83,6 +90,24 @@ def test_pip_cache_mount_is_env_opt_in(monkeypatch, tmp_path):
     mounts = json.loads(cmd[idx + 1])
     assert mounts == [{"type": "bind", "source": str(cache), "target": "/opt/ouro-pip-cache"}]
     assert cache.is_dir()
+
+
+def test_prefetch_cache_mount_is_env_opt_in(monkeypatch, tmp_path):
+    for _var in (
+        "OBO_TB_PIP_CACHE", "OBO_TB_APT_CACHE",
+        "OBO_TB_HF_CACHE", "OBO_TB_PREFETCH_CACHE",
+    ):
+        monkeypatch.delenv(_var, raising=False)
+
+    prefetch = tmp_path / "ouro-prefetch"
+    monkeypatch.setenv("OBO_TB_PREFETCH_CACHE", str(prefetch))
+    cmd = run_tb.harbor_command(_cfg())
+    idx = cmd.index("--mounts")
+    mounts = json.loads(cmd[idx + 1])
+    assert mounts == [
+        {"type": "bind", "source": str(prefetch), "target": "/opt/ouro-prefetch"}
+    ]
+    assert prefetch.is_dir()
 
 
 def test_pip_cache_mount_rejects_repo_path(monkeypatch):

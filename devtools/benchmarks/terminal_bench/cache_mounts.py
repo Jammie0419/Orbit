@@ -20,6 +20,13 @@ these are deploy mounts like `--n-concurrent`, so static validation ignores them
     CN speeds) even when every .deb is already cached.
   * `/root/.cache/huggingface` (+ `/app/datasets`) -- HF artifacts for tasks that
     pull datasets or models.
+  * `/opt/ouro-prefetch` -- STATIC external-network assets pre-downloaded on the
+    host (exp/prefetch_assets.py) for tasks whose solve-phase hosts have NO CN
+    mirror: protein-assembly's rcsb/fpbase/pubchem responses, build-pov-ray's
+    three POV-Ray 2.2 archives, install-windows-3.11's qemu tarball. Contract
+    differs from the other caches: the AGENT decides to read it first and
+    write misses back (per-task annotation), so this module only bind-mounts --
+    no side effects, no consumers here.
 """
 from __future__ import annotations
 
@@ -81,7 +88,8 @@ def ensure_uv_bin_in_cache(cache_dir: pathlib.Path) -> None:
 def cache_mounts(repo_root: pathlib.Path) -> list[dict[str, str]]:
     """Harbor `--mounts` entries for whichever caches the environment configures.
 
-    Opt-in per cache via OBO_TB_PIP_CACHE / OBO_TB_APT_CACHE / OBO_TB_HF_CACHE.
+    Opt-in per cache via OBO_TB_PIP_CACHE / OBO_TB_APT_CACHE / OBO_TB_HF_CACHE /
+    OBO_TB_PREFETCH_CACHE.
     Unset everywhere -> empty list -> the runner emits no `--mounts` at all, so
     behavior is unchanged for a plain checkout.
 
@@ -91,7 +99,8 @@ def cache_mounts(repo_root: pathlib.Path) -> list[dict[str, str]]:
     pip_cache = os.environ.get("OBO_TB_PIP_CACHE", "").strip()
     apt_cache = os.environ.get("OBO_TB_APT_CACHE", "").strip()
     hf_cache = os.environ.get("OBO_TB_HF_CACHE", "").strip()
-    if not (pip_cache or apt_cache or hf_cache):
+    prefetch_cache = os.environ.get("OBO_TB_PREFETCH_CACHE", "").strip()
+    if not (pip_cache or apt_cache or hf_cache or prefetch_cache):
         return []
 
     mounts: list[dict[str, str]] = []
@@ -113,6 +122,13 @@ def cache_mounts(repo_root: pathlib.Path) -> list[dict[str, str]]:
         datasets_dir = hf_cache_dir / "OpenThoughts-1k-sample"
         if datasets_dir.exists():
             mounts.append({"type": "bind", "source": str(datasets_dir), "target": "/app/datasets"})
+    if prefetch_cache:
+        prefetch_dir = ensure_outside_repo(pathlib.Path(prefetch_cache), repo_root)
+        # Plain bind, no side effects: unlike the pip/apt/HF caches nothing here
+        # consumes this directory -- the agent reads/writes it per its annotation.
+        # Dir mode 0o777 (set when created by prefetch_assets.py) keeps root-owned
+        # write-backs unlinkable by the host user for refreshes.
+        mounts.append({"type": "bind", "source": str(prefetch_dir), "target": "/opt/ouro-prefetch"})
     return mounts
 
 
