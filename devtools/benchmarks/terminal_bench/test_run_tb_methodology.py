@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 
@@ -108,6 +109,193 @@ def test_prefetch_cache_mount_is_env_opt_in(monkeypatch, tmp_path):
         {"type": "bind", "source": str(prefetch), "target": "/opt/ouro-prefetch"}
     ]
     assert prefetch.is_dir()
+
+
+def test_install_command_renders_shell_braces(tmp_path, monkeypatch):
+    """install() builds its shell script inside an f-string, so every literal shell
+    `${...}` must be written `${{...}}`. One missed escape raises NameError while
+    *building* the command — no container command is ever sent — and every trial of
+    a campaign dies at install with the same RuntimeError (2026-09-22
+    rstan-to-pystan: 5/5 in 54s, `name 'OURO_PIP_LOCK_HELD' is not defined`).
+    Nothing else in the suite constructs this string, so render it here and
+    shell-check the result."""
+    import asyncio
+
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    agent = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)
+    captured: dict = {}
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _capture_exec(_environment, **kwargs):
+        captured["command"] = kwargs["command"]
+
+    monkeypatch.setattr(agent, "_append_log", _noop)
+    monkeypatch.setattr(agent, "_upload_source", _noop)
+    monkeypatch.setattr(agent, "_patch_test_sh_for_china", _noop)
+    monkeypatch.setattr(agent, "exec_as_root", _capture_exec)
+
+    asyncio.run(agent.install(None))
+
+    cmd = captured["command"]
+    # the pip flock shim's shell parameter expansions survive rendering verbatim
+    assert '${OURO_PIP_LOCK_HELD:-}' in cmd
+    assert '${OURO_PIP_LOCK_WAIT:-600}' in cmd
+    assert "pip3.ouro-real" in cmd
+    # an escape left un-consumed by the f-string would hand bash Python braces
+    assert "{{" not in cmd
+
+    script = tmp_path / "install.sh"
+    script.write_text(cmd, encoding="utf-8")
+    check = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
+
+
+# --- test.sh URL rewrites -------------------------------------------------------
+
+def test_github_rewrite_is_token_anchored_and_idempotent():
+    """Only a BARE github URL is proxied: one already behind a mirror (gh-proxy.com,
+    ghfast.top, …) must survive untouched, or the rewrite double-prefixes it."""
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    rewrite = tb_agent._ghproxy_github_urls
+    assert rewrite("curl https://github.com/o/r/raw/main/x\n") == (
+        "curl https://gh-proxy.com/https://github.com/o/r/raw/main/x\n")
+    for already in (
+        "https://gh-proxy.com/https://github.com/o/r/raw/main/x",
+        "https://ghfast.top/https://github.com/o/r/raw/main/x",
+    ):
+        assert rewrite(already) == already
+    # a line mixing a proxied and a bare URL still gets the bare one rewritten
+    mixed = "a=https://gh-proxy.com/https://github.com/x/y && curl https://github.com/p/q/raw/main/z"
+    out = rewrite(mixed)
+    assert out.count("https://gh-proxy.com/") == 2
+    assert rewrite(out) == out
+
+
+def test_pytorch_index_rewrite_hits_local_wheels_and_is_idempotent():
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    text = "  --index https://download.pytorch.org/whl/cpu \\\n  --index-strategy unsafe-best-match \\\n"
+    out = tb_agent._rewrite_pytorch_index(text)
+    assert "--find-links /opt/ouro-prefetch/wheels \\" in out
+    assert "download.pytorch.org" not in out
+    assert tb_agent._rewrite_pytorch_index(out) == out
+
+
+def test_in_container_patch_snippet_compiles(tmp_path, monkeypatch):
+    """The fallback patcher is a python heredoc inside a shell string. A syntax or name
+    error there silently kills the belt-and-braces path — it happened once (a bare
+    _TEST_SH_INJECTED_MARKER identifier), so compile the body and check the rewrites
+    are the same ones the host side applies."""
+    import asyncio
+
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    agent = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)
+    captured: dict = {}
+
+    class _FakeResult:
+        return_code = 0
+        stderr = ""
+
+    class _FakeEnv:
+        async def exec(self, *, command, **_kwargs):
+            captured["command"] = command
+            return _FakeResult()
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent, "_append_log", _noop)
+    asyncio.run(agent._patch_test_sh_in_container(_FakeEnv()))
+
+    body = captured["command"].split("<<'PY'", 1)[1].split("\nPY\n", 1)[0]
+    compile(body, "<in-container-patch>", "exec")
+    assert "gh-proxy.com/https://github.com/" in body
+    assert "/opt/ouro-prefetch/wheels" in body
+
+
+# --- harbor control-plane route -------------------------------------------------
+
+def test_control_plane_keeps_a_working_proxy(monkeypatch):
+    """The env's proxy answers first: nothing is repointed, no core is probed."""
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    probed: list[str | None] = []
+
+    def fake_probe(proxy):
+        probed.append(proxy)
+        return True
+
+    env = {"HTTPS_PROXY": "http://127.0.0.1:7899", "https_proxy": "http://127.0.0.1:7899"}
+    assert cp.ensure_control_plane_reachable(env, probe=fake_probe) == "http://127.0.0.1:7899"
+    assert probed == ["http://127.0.0.1:7899"]
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:7899"
+
+
+def test_control_plane_falls_back_to_a_live_core():
+    """A dead node in the env's proxy (rzr's 7897, 2026-09-22) is replaced by lzm's 7899."""
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    probed: list[str | None] = []
+
+    def fake_probe(proxy):
+        probed.append(proxy)
+        return proxy == "http://127.0.0.1:7899"
+
+    env = {
+        "HTTPS_PROXY": "http://127.0.0.1:7897", "https_proxy": "http://127.0.0.1:7897",
+        "ALL_PROXY": "socks5://127.0.0.1:7897", "all_proxy": "socks5://127.0.0.1:7897",
+    }
+    assert cp.ensure_control_plane_reachable(env, probe=fake_probe) == "http://127.0.0.1:7899"
+    assert probed[0] == "http://127.0.0.1:7897"  # env's own proxy is tried first
+    assert env["HTTPS_PROXY"] == env["https_proxy"] == env["HTTP_PROXY"] == "http://127.0.0.1:7899"
+    assert "ALL_PROXY" not in env and "all_proxy" not in env
+
+
+def test_control_plane_falls_back_to_direct_and_drops_proxies():
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    env = {"HTTPS_PROXY": "http://127.0.0.1:7897", "https_proxy": "http://127.0.0.1:7897"}
+    route = cp.ensure_control_plane_reachable(env, probe=lambda proxy: proxy is None)
+    assert route == "direct"
+    assert not [k for k in env if "PROXY" in k.upper()]
+
+
+def test_control_plane_unreachable_leaves_env_untouched():
+    """Every candidate dead: keep the env as it was, so harbor reports its own error."""
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    env = {"HTTPS_PROXY": "http://127.0.0.1:7897", "https_proxy": "http://127.0.0.1:7897"}
+    before = dict(env)
+    calls: list[str | None] = []
+    route = cp.ensure_control_plane_reachable(env, probe=lambda proxy: calls.append(proxy) or False)
+    assert route == "unreachable"
+    assert env == before
+    # one retry pass over all candidates, not an endless loop
+    assert len(calls) == 2 * 3  # 7897, 7899, direct — twice
+
+
+def test_control_plane_url_is_the_host_harbor_actually_queries():
+    """harbor.auth.constants defaults to this project; the NO_PROXY lists elsewhere carry a
+    *different* supabase host (hlqxx…), so pin the one the client really calls."""
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    assert cp._HARBOR_CONTROL_PLANE_URL == "https://ofhuhcpkvzjlejydnvyd.supabase.co/rest/v1/"
+
+
+def test_smoke_child_env_routes_the_control_plane(monkeypatch, tmp_path):
+    from devtools.benchmarks.terminal_bench import run_harbor_smoke as smoke
+    import devtools.benchmarks.terminal_bench.control_plane_net as cp
+
+    seen: list[dict] = []
+    monkeypatch.setattr(smoke, "ensure_control_plane_reachable",
+                        lambda env: seen.append(dict(env)) or "http://127.0.0.1:7899")
+    env = smoke._harbor_child_env(tmp_path, {"PYTHONPATH": "/existing"})
+    assert seen and seen[0]["PYTHONPATH"] == str(tmp_path) + os.pathsep + "/existing"
 
 
 def test_pip_cache_mount_rejects_repo_path(monkeypatch):

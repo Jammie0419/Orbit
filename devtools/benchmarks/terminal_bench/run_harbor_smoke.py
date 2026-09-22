@@ -32,6 +32,7 @@ from devtools.benchmarks.common.run_roots import (
     run_root as default_run_root,
 )
 from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mounts
+from devtools.benchmarks.terminal_bench.control_plane_net import ensure_control_plane_reachable
 
 
 AGENT_IMPORT = "devtools.benchmarks.terminal_bench.harbor_installed_agent:OuroborosTerminalBenchAgent"
@@ -320,6 +321,9 @@ def _harbor_child_env(repo_root: pathlib.Path,
     if existing:
         entries.append(existing)
     env["PYTHONPATH"] = os.pathsep.join(entries)
+    # harbor 在跑第一个 trial 之前就要解析任务包元数据（supabase，国内直连不通），
+    # 所以子进程 env 里必须有一条能用的代理；环境里那条可能指向节点已挂的内核。
+    print(f"[smoke] harbor control-plane route: {ensure_control_plane_reachable(env)}")
     return env
 
 

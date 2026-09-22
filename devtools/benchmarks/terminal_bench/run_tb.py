@@ -42,6 +42,7 @@ from devtools.benchmarks.common.run_roots import (
     safe_join_under,
 )
 from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mounts
+from devtools.benchmarks.terminal_bench.control_plane_net import ensure_control_plane_reachable
 from devtools.benchmarks.terminal_bench.run_harbor_smoke import AGENT_IMPORT
 from ouroboros.config import SETTINGS_DEFAULTS
 
@@ -1180,7 +1181,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.execute:
             final.update({"outcome": "command_generated", "exit_code": 0})
             return 0
-        completed = subprocess.run(cmd, cwd=repo, env={**os.environ, "PYTHONPATH": str(repo)})
+        harbor_env = {**os.environ, "PYTHONPATH": str(repo)}
+        # harbor 的任务包元数据在 supabase（国内直连不通）：按“环境里的代理 → 本机内核 → 直连”
+        # 探一遍，把能用的那条写进子进程 env，节点挂掉时不再只看到 400 行 ConnectError。
+        print(f"[run_tb] harbor control-plane route: {ensure_control_plane_reachable(harbor_env)}",
+              file=sys.stderr)
+        completed = subprocess.run(cmd, cwd=repo, env=harbor_env)
         ledger: dict | None = None
         try:
             ledger = write_disclosure_ledger(
