@@ -225,15 +225,26 @@ def _user_annotation(
     return {key: annotation.get(key) for key in ("action", "target", "status")}
 
 
+def _cost_breakdown_ledger_read(data_dir: pathlib.Path) -> Dict[str, Any]:
+    """ensure_legacy_imported + usage_breakdown — the sync, ledger-touching half of
+    the cost endpoint. Both take cross-process usage locks (usage_import.lock 60s /
+    usage_attempts.lock 45s acquire, 0.05s busy-wait), so the endpoint runs this via
+    ``asyncio.to_thread``: inlined on the loop, ONE orphaned-lock wait froze every
+    other request with it — the same wedge class as ``api_task_get``'s former inline
+    breakdown and the supervisor's 92-101s stalls."""
+    from ouroboros.usage_accounting import ensure_legacy_imported, usage_breakdown
+
+    ensure_legacy_imported(data_dir)
+    return usage_breakdown(data_dir)
+
+
 def make_cost_breakdown_endpoint(data_dir: pathlib.Path):
     async def api_cost_breakdown(_request: Request) -> JSONResponse:
         """Return ledger-derived cost and physical-attempt breakdowns."""
         try:
             from ouroboros.pricing import infer_model_category
-            from ouroboros.usage_accounting import ensure_legacy_imported, usage_breakdown
 
-            ensure_legacy_imported(data_dir)
-            breakdown = usage_breakdown(data_dir)
+            breakdown = await asyncio.to_thread(_cost_breakdown_ledger_read, data_dir)
             unattributed = dict(breakdown.get("unattributed") or {})
             by_model_raw = dict(breakdown.get("by_model") or {})
             try:

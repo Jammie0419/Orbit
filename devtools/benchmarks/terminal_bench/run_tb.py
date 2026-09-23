@@ -999,24 +999,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    # Merge --tasks-file into the repeated --task list before anything reads it
-    # (admission records the union as requested_task_ids, harbor gets it as
-    # repeated --include-task-name). Blank lines and '#' comments are ignored so
-    # the list files can carry notes.
-    if args.tasks_file:
-        tasks_path = pathlib.Path(args.tasks_file).expanduser()
-        if not tasks_path.is_file():
-            parser.error(f"--tasks-file not found: {tasks_path}")
-        from_file: list[str] = []
-        for raw in tasks_path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            from_file.append(line)
-        if not from_file:
-            parser.error(f"--tasks-file is empty (no task names): {tasks_path}")
-        args.task = list(args.task or []) + from_file
-
     fixed_actor: dict[str, Any] = {}
     if args.all_model:
         fixed_actor = apply_all_model(
@@ -1164,6 +1146,48 @@ def main(argv: list[str] | None = None) -> int:
         # Durable before job-config discovery/version probes and the Harbor subprocess.
         write_json(manifest_path, manifest)
     with finalize_run_manifest(manifest_path, manifest) as final:
+        # --tasks-file is read HERE — after admission, never before it (launcher-audit
+        # invariant A: reading file CONTENT is a refusal no argv can explain, so it may
+        # not run while no manifest exists yet; existence itself is argv-explainable and
+        # stays checkable anywhere). Every refusal below lands on the already-written
+        # manifest via `final`, and admission's argv-only requested_task_ids is re-trued
+        # to the union harbor will actually run. Blank lines and '#' comments are ignored
+        # so the list files can carry notes.
+        if args.tasks_file:
+            tasks_path = pathlib.Path(args.tasks_file).expanduser()
+            if not tasks_path.is_file():
+                final.update({
+                    "outcome": "refused",
+                    "refusal": {"reason": "tasks_file_not_found", "path": str(tasks_path)},
+                })
+                parser.error(f"--tasks-file not found: {tasks_path}")
+            try:
+                raw_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError) as exc:
+                final.update({
+                    "outcome": "refused",
+                    "refusal": {
+                        "reason": "tasks_file_unreadable",
+                        "path": str(tasks_path),
+                        "error": str(exc)[:500],
+                    },
+                })
+                parser.error(f"--tasks-file unreadable: {tasks_path}: {exc}")
+            from_file: list[str] = []
+            for raw in raw_lines:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                from_file.append(line)
+            if not from_file:
+                final.update({
+                    "outcome": "refused",
+                    "refusal": {"reason": "tasks_file_empty", "path": str(tasks_path)},
+                })
+                parser.error(f"--tasks-file is empty (no task names): {tasks_path}")
+            args.task = list(args.task or []) + from_file
+            manifest["requested_task_ids"] = [str(item) for item in (args.task or [])]
+            manifest["requested_count"] = len(manifest["requested_task_ids"])
         job_dir.mkdir(parents=True, exist_ok=True)
         metadata_path.write_text(
             leaderboard_metadata(agent_name=args.agent_name, org_name=args.org_name, model=args.model, light_model=args.light_model, disable_agent_web=bool(args.disable_agent_web)),

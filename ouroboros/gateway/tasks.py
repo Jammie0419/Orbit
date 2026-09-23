@@ -885,17 +885,34 @@ def _task_cost_breakdown_view(drive_root: pathlib.Path, result: Dict[str, Any]) 
     }
 
 
+def _task_detail_bundle(drive_root: pathlib.Path, task_id: str):
+    """(task result, cost_breakdown view) for one task — the sync, ledger-touching half.
+
+    Split out so ``api_task_get`` can run it OFF the event loop: the cost view reads
+    ``usage_breakdown``, which takes the cross-process ``usage_attempts.lock`` (45s
+    acquire, 0.05s poll). Inlined on the loop, ONE such wait froze the whole
+    gateway — the same wedge class as the supervisor's 92-101s stalls (a
+    SIGKILL-orphaned lockfile is only reclaimed at its 90s stale bound) — and every
+    ``/api/tasks`` poll starved with it."""
+    data = load_effective_task_result(drive_root, task_id)
+    if not data:
+        return None, None
+    return data, _task_cost_breakdown_view(drive_root, data)
+
+
 async def api_task_get(request: Request) -> JSONResponse:
     try:
         task_id = validate_task_id(request.path_params.get("task_id"))
     except ValueError as exc:
         return json_error(str(exc), 400)
     drive_root = request_drive_root(request)
-    data = load_effective_task_result(drive_root, task_id)
+    # Ledger readers run in the default executor — same pattern as
+    # _tasks_list_payload / _state_snapshot. The usage-lock wait must never pin
+    # the loop the runner's 2s polls share.
+    data, breakdown_view = await asyncio.to_thread(_task_detail_bundle, drive_root, task_id)
     if not data:
         return json_error("task not found", 404)
     payload = public_task_result(data)
-    breakdown_view = _task_cost_breakdown_view(drive_root, data)
     if breakdown_view is not None:
         payload["cost_breakdown"] = breakdown_view
     return JSONResponse(payload)

@@ -1889,7 +1889,9 @@ def test_terminal_bench_network_preflight_uses_configured_provider(tmp_path, mon
     assert "api.openai.com" in env.command
     assert "openrouter.ai" not in env.command
     assert "urllib.error.HTTPError" in env.command
-    assert "openai_preflight_status 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
+    # HTTPError responses are reported per-attempt (`attempt n/3`, script constant
+    # attempts=3); a bare `status 401` line only ever appears on the success path.
+    assert "openai_preflight_status attempt 1/3 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
 
 
 def test_terminal_bench_openrouter_credit_preflight_uses_authoritative_limit_remaining(tmp_path, monkeypatch):
@@ -2036,7 +2038,7 @@ def test_terminal_bench_network_preflight_supports_openai_compatible(tmp_path, m
     )
 
     assert "provider.example.invalid/v1/models" in env.command
-    assert "openai_compatible_preflight_status 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
+    assert "openai_compatible_preflight_status attempt 1/3 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
 
 
 def test_terminal_bench_adapter_forwards_gigachat_and_preflights_direct_provider(tmp_path, monkeypatch):
@@ -2076,7 +2078,7 @@ def test_terminal_bench_adapter_forwards_gigachat_and_preflights_direct_provider
 
     assert injected["GIGACHAT_CREDENTIALS"] == "gigachat-test-credentials"
     assert "gigachat.example.invalid/api/v1/models" in env.command
-    assert "gigachat_preflight_status 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
+    assert "gigachat_preflight_status attempt 1/3 401" in (tmp_path / "network-preflight.txt").read_text(encoding="utf-8")
 
 
 def test_terminal_bench_adapter_refuses_container_secret_injection_by_default(tmp_path, monkeypatch):
@@ -3111,12 +3113,23 @@ def test_terminal_bench_adapter_quotes_hostile_workspace_dir(tmp_path):
         stdout = '{"return_code": 0}\n'
         stderr = ""
 
+    class FakeFail:
+        return_code = 1
+        stdout = ""
+        stderr = ""
+
     class FakeEnvironment:
         def __init__(self):
             self.calls = []
 
         async def exec(self, **kwargs):
             self.calls.append(kwargs)
+            # The image-WORKDIR probe (readlink /proc/1/cwd) FAILS so resolution
+            # falls through to the REQUESTED dir below — that is the path this
+            # quoting test exists for. A probe result that IS adopted gets
+            # shlex.quote'd the same way at its own `test -d` check.
+            if str(kwargs.get("command", "")).startswith("readlink "):
+                return FakeFail()
             return FakeResult()
 
     hostile = "/tmp/ws'; touch /tmp/pwn; echo '"
@@ -3129,8 +3142,9 @@ def test_terminal_bench_adapter_quotes_hostile_workspace_dir(tmp_path):
 
     assert summary["return_code"] == 0
     quoted = shlex.quote(hostile)
-    assert environment.calls[0]["command"] == f"test -d {quoted}"
-    git_command = environment.calls[1]["command"]
+    assert environment.calls[0]["command"] == "readlink /proc/1/cwd 2>/dev/null"
+    assert environment.calls[1]["command"] == f"test -d {quoted}"
+    git_command = environment.calls[2]["command"]
     assert f"workspace_dir={quoted}" in git_command
     assert "cd \"$workspace_dir\"" in git_command
     runner_command = environment.calls[-1]["command"]
@@ -6831,6 +6845,76 @@ def test_run_tb_manifest_records_the_model_the_run_actually_resolved(tmp_path, m
     # Slots the in-container adapter never forwards stay OUT: recording a model the container
     # cannot see would be as false as recording the wrong one.
     assert not set(single_manifest["model_slots"]) & set(run_tb._UNFORWARDED_MODEL_SLOT_KEYS)
+
+
+def test_run_tb_tasks_file_merges_after_admission_and_lands_refusals_on_manifest(tmp_path, monkeypatch):
+    """--tasks-file is read POST-admission (launcher-audit invariant A): content
+    refusals must land on an already-written manifest instead of dying before one
+    exists, and a successful merge must leave requested_task_ids equal to what the
+    harbor command was actually built with."""
+    from devtools.benchmarks.common import model_slots
+    from devtools.benchmarks.common.manifests import MODEL_SLOT_KEYS
+    from devtools.benchmarks.terminal_bench import run_tb
+
+    seed = tmp_path / "seed"
+    _git_repo(seed)
+    monkeypatch.setattr(run_tb, "repo_root_from_devtools", lambda: seed)
+    monkeypatch.setattr(run_tb, "harbor_version", lambda _harbor_bin: "")
+    monkeypatch.chdir(tmp_path)
+    for key in (
+        *MODEL_SLOT_KEYS, *model_slots._ACTIVE_LOCAL_ROUTE_KEYS,
+        model_slots.SUBAGENTS_SETTING, model_slots.REVIEWER_SLOTS_ENV, "USE_LOCAL_HEAVY",
+    ):
+        monkeypatch.setenv(key, "")
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"OUROBOROS_MODEL": "template/main",
+                    "OUROBOROS_MODEL_LIGHT": "template/light"}),
+        encoding="utf-8",
+    )
+    tasks_file = tmp_path / "tasks.txt"
+    tasks_file.write_text(
+        "# list files may carry notes\nterminal-bench/feal-linear-cryptanalysis\n\n"
+        "terminal-bench/rstan-to-pystan\n",
+        encoding="utf-8",
+    )
+
+    merged_root = tmp_path / "merged"
+    assert run_tb.main([
+        "--tasks-file", str(tasks_file),
+        "--model", "openai-compatible/mimo-test",
+        "--run-root", str(merged_root),
+        "--submission-root", str(tmp_path / "submission"),
+        "--settings-path", str(settings),
+    ]) == 0
+    manifest = json.loads((merged_root / "run_manifest.json").read_text(encoding="utf-8"))
+    # Comments/blank lines dropped, order preserved, recorded ON the manifest...
+    assert manifest["requested_task_ids"] == [
+        "terminal-bench/feal-linear-cryptanalysis",
+        "terminal-bench/rstan-to-pystan",
+    ]
+    assert manifest["requested_count"] == 2
+    # ...and the harbor command itself carries the union.
+    harbor_cmd = (merged_root / "harbor_command.txt").read_text(encoding="utf-8")
+    assert "--include-task-name terminal-bench/feal-linear-cryptanalysis" in harbor_cmd
+    assert "--include-task-name terminal-bench/rstan-to-pystan" in harbor_cmd
+
+    # A content refusal (missing file) refuses ONTO the admitted manifest: durable,
+    # typed, and no longer a pre-admission death that leaves nothing behind.
+    missing_root = tmp_path / "missing"
+    with pytest.raises(SystemExit) as excinfo:
+        run_tb.main([
+            "--tasks-file", str(tmp_path / "nope.txt"),
+            "--model", "openai-compatible/mimo-test",
+            "--run-root", str(missing_root),
+            "--submission-root", str(tmp_path / "submission"),
+            "--settings-path", str(settings),
+        ])
+    assert excinfo.value.code == 2
+    refused = json.loads((missing_root / "run_manifest.json").read_text(encoding="utf-8"))
+    assert refused["extra"]["outcome"] == "refused"
+    assert refused["extra"]["refusal"]["reason"] == "tasks_file_not_found"
+    assert refused["requested_task_ids"] == []
 
 
 def test_gaia_and_tb_launchers_add_no_runtime_attestation(tmp_path):

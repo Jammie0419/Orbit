@@ -68,6 +68,46 @@ def _seed_accounting(root):
     )
 
 
+def test_ledger_endpoint_readers_stay_off_the_event_loop(tmp_path, monkeypatch):
+    """The cross-process usage lock (45s acquire, 0.05s busy-wait; 90s stale bound
+    for a SIGKILL-orphaned lockfile) must never be waited on from a handler thread:
+    inlined, ONE wait froze the whole gateway — the runner's 2s /api/tasks polls
+    timed out and trials died, the same wedge class as the supervisor's 92-101s
+    stalls. Both ledger endpoints run their readers via asyncio.to_thread, so every
+    reader below must execute OFF the thread asyncio.run uses for the loop."""
+    import threading
+
+    import ouroboros.gateway.history as gateway_history
+    import ouroboros.gateway.tasks as gateway_tasks
+
+    loop_thread = threading.get_ident()
+    seen: list[tuple[str, int]] = []
+
+    def _spy(name):
+        seen.append((name, threading.get_ident()))
+
+    monkeypatch.setattr(
+        gateway_tasks,
+        "load_effective_task_result",
+        lambda drive_root, task_id: (_spy("task_get"), None)[1],
+    )
+    detail_request = types.SimpleNamespace(
+        path_params={"task_id": "t1"},
+        app=types.SimpleNamespace(state=types.SimpleNamespace(drive_root=tmp_path)),
+    )
+    response = asyncio.run(gateway_tasks.api_task_get(detail_request))
+    assert response.status_code == 404  # spy served no data; the shape is unchanged
+
+    monkeypatch.setattr(ua, "ensure_legacy_imported", lambda root: _spy("import"))
+    monkeypatch.setattr(ua, "usage_breakdown", lambda root, **_kw: _spy("breakdown") or {})
+    response = asyncio.run(gateway_history.make_cost_breakdown_endpoint(tmp_path)(None))
+    assert response.status_code == 200
+
+    assert [name for name, _ in seen] == ["task_get", "import", "breakdown"]
+    offenders = [name for name, ident in seen if ident == loop_thread]
+    assert not offenders, f"ledger reader(s) {offenders} ran on the event-loop thread"
+
+
 def test_cost_breakdown_uses_ledger_not_later_compatibility_events(tmp_path, monkeypatch):
     from ouroboros.gateway.history import make_cost_breakdown_endpoint
     from supervisor import state as supervisor_state
