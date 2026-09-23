@@ -218,6 +218,135 @@ def test_in_container_patch_snippet_compiles(tmp_path, monkeypatch):
     assert "/opt/ouro-prefetch/wheels" in body
 
 
+def test_task_runner_heredoc_compiles_and_tolerates_stalls(tmp_path, monkeypatch):
+    """The agent runner is a python script embedded in an f-string and shipped via a
+    shell heredoc; a stray `${...}`/`{...}` there dies before anything runs (twice
+    already), so render the real thing and compile it.
+
+    It also carries the tolerance contract for a wedged agent server: the supervisor
+    loop stalled ~94s on 2026-09-23 and the old single 30s GET with no retry killed
+    2/5 trials with RuntimeError. Any regression back to "one shot, 30s" fails here."""
+    import asyncio
+
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    agent = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)
+    captured: dict = {}
+
+    class _Result:
+        return_code = 0
+        stdout = '{"status": "completed", "reason_code": "", "outcome_axes": {}}'
+        stderr = ""
+
+    class _Env:
+        async def exec(self, *, command, **_kwargs):
+            captured["command"] = command
+            return _Result()
+
+    out = asyncio.run(agent._run_ouroboros_task(_Env(), {}))
+    assert out["status"] == "completed"
+
+    body = captured["command"].split("<<'PY'", 1)[1].split("\nPY\n", 1)[0]
+    compile(body, "<task-runner>", "exec")
+
+    # stall tolerance: GETs retried with backoff, never a bare 30s one-shot
+    assert "def api(method, path, body=None, timeout=60, retries=3)" in body
+    assert "urllib.error.URLError" in body
+    assert "import urllib.error" in body
+    assert 'api("GET", "/api/tasks/" + urllib.parse.quote(task_id), timeout=60)' in body
+    # a POST create must not be replayed (idempotency)
+    assert 'attempts = retries if method == "GET" else 1' in body
+
+
+def test_container_env_forwards_agent_tuning_knobs(tmp_path, monkeypatch):
+    """_container_env()'s whitelist is the ONLY path from the host .env into the agent
+    container (the server never loads dotenv, _copy_clean_source strips every .env*, and
+    the harbor command carries no --agent-env). A knob missing from the whitelist does
+    not fail loudly — it silently runs the code default: MAIN_LOOP_MAX_TOKENS stayed at
+    65536 for every TB run (a full-cap turn at the endpoint's 8.8 tok/s needs ~2h and dies
+    on the SDK's 600s read timeout; observed 608s APITimeoutError, 25/73 tasks
+    deadline_local) and TRANSIENT_RETRY_MAX=1 ran as 6 — the "attempt 1/6" in the logs."""
+    import devtools.benchmarks.terminal_bench.harbor_installed_agent as tb_agent
+
+    monkeypatch.setenv("OUROBOROS_MAIN_LOOP_MAX_TOKENS", "4096")
+    monkeypatch.setenv("OUROBOROS_TRANSIENT_RETRY_MAX", "1")
+    # loop.py:2457 inlines `or 80_000`, so an unwrapped value was harmlessly invisible
+    # until it changed — forward it so the .env knob is never silently dead.
+    monkeypatch.setenv("OUROBOROS_FALLBACK_CONTEXT_TOKENS", "60000")
+    env = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)._container_env()
+    assert env.get("OUROBOROS_MAIN_LOOP_MAX_TOKENS") == "4096"
+    assert env.get("OUROBOROS_TRANSIENT_RETRY_MAX") == "1"
+    assert env.get("OUROBOROS_FALLBACK_CONTEXT_TOKENS") == "60000"
+
+    # Unset on the host -> not injected, so the container falls back to the code default
+    # instead of receiving an empty string the runtime would parse as 0/invalid.
+    monkeypatch.delenv("OUROBOROS_MAIN_LOOP_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("OUROBOROS_TRANSIENT_RETRY_MAX", raising=False)
+    monkeypatch.delenv("OUROBOROS_FALLBACK_CONTEXT_TOKENS", raising=False)
+    env2 = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)._container_env()
+    assert "OUROBOROS_MAIN_LOOP_MAX_TOKENS" not in env2
+    assert "OUROBOROS_TRANSIENT_RETRY_MAX" not in env2
+    assert "OUROBOROS_FALLBACK_CONTEXT_TOKENS" not in env2
+
+    # Forwarded since the llm.py root fix (2026-09-23): both remote client constructors
+    # now take this value explicitly, so it finally governs the lane that used to sit on
+    # the openai SDK's silent 600s default. The .env must keep it >=1800 (it is also the
+    # worst-case generation budget for MAIN_LOOP_MAX_TOKENS) — a low value would re-squeeze
+    # ordinary turns the way 600s did (feal-linear-cryptanalysis 3/3, 2.4min).
+    monkeypatch.setenv("OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC", "2700")
+    env3 = tb_agent.OuroborosTerminalBenchAgent(logs_dir=tmp_path)._container_env()
+    assert env3.get("OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC") == "2700"
+
+
+def test_remote_clients_carry_configured_read_timeout(monkeypatch):
+    """Root-cause lock (2026-09-23): the openai SDK silently defaults to read=600s unless
+    the caller passes an explicit timeout, which is what squeezed a turn to ~5280 tokens at
+    the endpoint's 4.1~21 tok/s — long outputs came back length-truncated/empty, were skipped
+    twice, and the task terminalized as provider_unavailable (feal-linear-cryptanalysis 5/5).
+
+    Both directions are asserted so the test is env-independent: the shipped default (2700)
+    and a knob value flowing through (3600). Runners source .env, so a hardcoded single
+    expectation would flip depending on the developer's shell."""
+    import openai
+
+    from ouroboros.llm import LLMClient
+
+    target = {"api_key": "k", "base_url": "https://x/v1"}
+
+    # knob absent -> shipped default, and never the SDK's own 600s
+    monkeypatch.delenv("OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC", raising=False)
+    client = LLMClient._new_remote_client(target)
+    assert client.timeout.read == 2700.0, client.timeout
+    assert client.timeout.connect == 30.0, client.timeout
+    assert client.timeout.read != openai._constants.DEFAULT_TIMEOUT.read
+
+    # knob set -> the configured value reaches the client (the whole point of the fix)
+    monkeypatch.setenv("OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC", "3600")
+    tuned = LLMClient._new_remote_client(target)
+    assert tuned.timeout.read == 3600.0, tuned.timeout
+    assert tuned.timeout.connect == 30.0
+
+    # the async lane carries the same shape (it had the identical silent-600s default)
+    captured: dict = {}
+
+    class _FakeAsync:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import openai as _openai
+
+    original = _openai.AsyncOpenAI
+    _openai.AsyncOpenAI = _FakeAsync
+    try:
+        inst = LLMClient.__new__(LLMClient)
+        inst._async_remote_clients = {}
+        inst._get_async_remote_client(target)
+    finally:
+        _openai.AsyncOpenAI = original
+    assert captured["timeout"].read == 3600.0
+    assert captured["timeout"].connect == 30.0
+
+
 # --- harbor control-plane route -------------------------------------------------
 
 def test_control_plane_keeps_a_working_proxy(monkeypatch):

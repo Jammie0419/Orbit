@@ -584,10 +584,22 @@ def test_ephemeral_openai_client_disables_sdk_retries(monkeypatch):
     LLMClient._new_remote_client({
         "api_key": "key", "base_url": "https://example.test/v1", "default_headers": {"X": "Y"},
     })
-    assert captured == {
-        "api_key": "key", "base_url": "https://example.test/v1",
-        "default_headers": {"X": "Y"}, "max_retries": 0,
+    # max_retries=0 is this test's point (no SDK-side retries). `timeout` became part of the
+    # contract on 2026-09-23: without it the openai SDK silently applies ITS read=600s default,
+    # which squeezed turns to ~5280 tokens and terminalized feal-linear-cryptanalysis as
+    # provider_unavailable (3/3 in 2.4min). Expect exactly these five keys so a future drop of
+    # `timeout` fails here instead of quietly reverting to 600s.
+    assert set(captured) == {
+        "api_key", "base_url", "default_headers", "max_retries", "timeout",
     }
+    assert captured["api_key"] == "key"
+    assert captured["base_url"] == "https://example.test/v1"
+    assert captured["default_headers"] == {"X": "Y"}
+    assert captured["max_retries"] == 0
+    expected = LLMClient._no_proxy_timeout()  # same source of truth the client uses
+    assert captured["timeout"].read == expected.read
+    assert captured["timeout"].write == expected.write
+    assert captured["timeout"].connect == expected.connect == 30.0
 
 
 def test_provider_test_attempts_are_physically_accounted_without_chat_side_effects(

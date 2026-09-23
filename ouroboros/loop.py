@@ -395,7 +395,14 @@ _TREE_ACCOUNTING_MAX_STALE_SEC = 120.0
 # finish_reason=null) allowed before the task degrades to the provider-unavailable
 # rail. The cap keeps a provider that hits the cap on EVERY request from spinning
 # rounds; a single cap is expected to recover on the very next round.
-_MAX_LENGTH_TRUNCATED_SKIPS = 2
+# 2026-09-23: 2 -> 6. At 2, OUR OWN output cap could kill a task in ~2 rounds —
+# feal-linear-cryptanalysis died 5/5 in 2.4 min with reason_code=provider_unavailable
+# while the endpoint was healthy (the model legitimately wanted more than the cap).
+# Six consecutive hits is unreachable at the default 65536 cap (historical hit rate
+# 16/5548 = 0.29%), so termination falls to the task deadline — the honest rail.
+# Genuine provider/connection failures never enter this branch (they land straight on
+# the terminalize call below), so outage detection latency is unchanged.
+_MAX_LENGTH_TRUNCATED_SKIPS = 6
 
 
 def _loop_tree_accounting(

@@ -924,7 +924,22 @@ def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[
     if usage_status == RESULT_INFRA_FAILED:
         execution_status = EXECUTION_INFRA_FAILED
         reason_code = usage_reason or REASON_PROVIDER_FAILURE
-        failure = {"kind": "provider", "reason_code": reason_code}
+        # 2026-09-23: a run of length-truncated rounds ends here as
+        # reason_code=provider_unavailable, but the cause is OUR max_tokens cap (the
+        # gateway returns finish_reason=null at the cap), not an endpoint outage —
+        # feal-linear-cryptanalysis reported 5/5 "provider" while the endpoint answered
+        # 1-token requests in seconds. The rail stays in the CLOSED vocabulary (see
+        # ACCEPTANCE_BYPASS_REASON_BY_RAIL); only the kind moves, so analysis filtering
+        # kind=="provider" stops counting our cap deaths as outages. Missing /
+        # non-truncated kinds keep "provider" — a real transport death still reads as one.
+        failure = {
+            "kind": (
+                "output_budget"
+                if str(usage.get("_last_llm_error_kind") or "") == "length_truncated"
+                else "provider"
+            ),
+            "reason_code": reason_code,
+        }
     elif (
         usage_status == RESULT_FAILED
         and usage_reason in BEST_EFFORT_REASON_CODES

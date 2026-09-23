@@ -43,7 +43,7 @@ from devtools.benchmarks.common.run_roots import (
 )
 from devtools.benchmarks.terminal_bench.cache_mounts import extend_with_cache_mounts
 from devtools.benchmarks.terminal_bench.control_plane_net import ensure_control_plane_reachable
-from devtools.benchmarks.terminal_bench.run_harbor_smoke import AGENT_IMPORT
+from devtools.benchmarks.terminal_bench.run_harbor_smoke import AGENT_IMPORT, agent_knobs_snapshot
 from ouroboros.config import SETTINGS_DEFAULTS
 
 
@@ -613,6 +613,21 @@ def harbor_command(config: HarborCommandConfig) -> list[str]:
     return cmd
 
 
+def _length_truncated_hits(result_json: pathlib.Path) -> int:
+    """Rounds this trial lost to OUR max_tokens cap (gateway finish_reason=null at the cap).
+
+    Counted from the line loop_llm_call logs when it classifies such a response; a trial
+    whose terminal provider_unavailable carries hits>0 was ended by the output budget, not
+    by an endpoint outage. Best-effort: a missing log is 0, never raises into the result path.
+    """
+    path = result_json.parent / "agent" / "ouroboros-server.stderr.log"
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0
+    return text.count("treated as length-truncated")
+
+
 def write_disclosure_ledger(*, jobs_dir: pathlib.Path, out_path: pathlib.Path, run_meta: dict) -> dict:
     """Walk Harbor's jobs dir, read every trial result.json, and write a denominator-preserving
     disclosure ledger: reward distribution, exception_info histogram (AgentTimeoutError /
@@ -676,6 +691,7 @@ def write_disclosure_ledger(*, jobs_dir: pathlib.Path, out_path: pathlib.Path, r
             "captured_after_cancellation": captured_after_cancellation,
             "cost_usd": agent_result.get("cost_usd"),
             "turns": agent_meta.get("turns"),
+            "length_truncated_hits": _length_truncated_hits(result_json),
             "started_at": data.get("started_at"),
             "finished_at": data.get("finished_at"),
         })
@@ -690,6 +706,11 @@ def write_disclosure_ledger(*, jobs_dir: pathlib.Path, out_path: pathlib.Path, r
     reward_distribution = collections.Counter(_reward_key(t["reward"]) for t in trials)
     exception_histogram = collections.Counter(t["exception_type"] for t in trials if t["exception_type"])
     reason_code_histogram = collections.Counter(t["reason_code"] for t in trials if t["reason_code"])
+    # Cap-exhaustion attribution (2026-09-23): how many trials OUR max_tokens cap burned
+    # rounds on. Without this a provider_unavailable trial whose real cause was the cap is
+    # indistinguishable from an endpoint outage (feal-linear-cryptanalysis 5/5, 09-23).
+    length_truncated_hits = sum(int(t.get("length_truncated_hits") or 0) for t in trials)
+    length_truncated_trials = sum(1 for t in trials if int(t.get("length_truncated_hits") or 0) > 0)
     # The honest provider/rate-limit/infra signal combines THREE sources: a Harbor exception that is
     # not a timeout (RuntimeError/ApiRateLimitError/NonZeroAgentExitCodeError), the adapter's
     # infra_failed flag, OR an Ouroboros reason_code denoting a provider fault (which Harbor records
@@ -778,6 +799,10 @@ def write_disclosure_ledger(*, jobs_dir: pathlib.Path, out_path: pathlib.Path, r
         "wall_clock_cancellation_count": int(categories["cancelled"]),
         "cost_truncated_count": int(categories["cost_truncated"]),
         "genuine_failure_count": int(categories["genuine"]),
+        # Rounds lost to OUR output cap; see exception_note for how to read it.
+        "length_truncated_hit_count": length_truncated_hits,
+        "length_truncated_trial_count": length_truncated_trials,
+        "agent_knobs": dict(run_meta.get("agent_knobs") or {}),
         "exception_note": (
             "Honest taxonomy: every reward-0 trial is exactly one of provider_or_infra_failure / "
             "wall_clock_cancellation / cost_truncated / genuine_failure (reward-1 trials are 'pass'). "
@@ -790,7 +815,13 @@ def write_disclosure_ledger(*, jobs_dir: pathlib.Path, out_path: pathlib.Path, r
             "DNS and get stamped provider_unavailable even though the task already passed or was merely cut "
             "off by wall-clock -- those go to wall_clock_cancellation (captured_after_cancellation), NOT "
             "provider_or_infra. genuine_failure_count is reward-0 given a fair shot (real wrong answers, "
-            "not provider artifacts and not wall-clock cut-offs)."
+            "not provider artifacts and not wall-clock cut-offs). "
+            "length_truncated_* counts rounds OUR own max_tokens cap produced as unusable "
+            "(the gateway returns finish_reason=null at the cap): a provider_unavailable "
+            "trial with length_truncated_trial_count>0 ended on the output budget, not an "
+            "endpoint outage. agent_knobs records the cap/timeout/retry/context values this "
+            "batch actually ran under — compare it across batches before attributing a score "
+            "difference to anything else."
         ),
         "total_cost_usd": round(sum(costs), 4) if costs else None,
         "per_task_pass_rate": per_task_pass_rate,
@@ -1128,6 +1159,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         manifest["available_subagents"] = fixed_actor["available_subagents"]
         manifest["harness"]["fixed_model_actor"] = fixed_actor
+        # Which cap/timeout/retry/context this batch ran under (see agent_knobs_snapshot).
+        manifest["agent_knobs"] = agent_knobs_snapshot()
         # Durable before job-config discovery/version probes and the Harbor subprocess.
         write_json(manifest_path, manifest)
     with finalize_run_manifest(manifest_path, manifest) as final:
@@ -1196,6 +1229,9 @@ def main(argv: list[str] | None = None) -> int:
                     "dataset": args.dataset,
                     "k": int(args.k),
                     "n_concurrent": int(args.n_concurrent),
+                    # Same knobs as run_manifest, so a ledger read alone tells the
+                    # reader which cap/timeout this batch actually ran under.
+                    "agent_knobs": agent_knobs_snapshot(),
                     "disable_agent_web": bool(args.disable_agent_web),
                     "setup_timeout_multiplier": float(args.setup_timeout_multiplier),
                     "build_timeout_multiplier": float(args.build_timeout_multiplier),

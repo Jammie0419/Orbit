@@ -1455,6 +1455,17 @@ class LLMClient:
         kwargs: Dict[str, Any] = {
             "api_key": str(target.get("api_key") or ""),
             "max_retries": 0,
+            # Root-cause fix (2026-09-23): without an explicit timeout the openai SDK
+            # silently applies ITS default read=600s, and that silently overrode
+            # OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC (2700s dead-socket bound) — that
+            # knob only ever reached the no_proxy lane. At the endpoint's measured
+            # 4.1~21 tok/s a 600s read caps a turn at ~5280 tokens, so ordinary long
+            # outputs came back length-truncated/empty, were skipped twice
+            # (_MAX_LENGTH_TRUNCATED_SKIPS=2), and the task terminalized as
+            # provider_unavailable (feal-linear-cryptanalysis 3/3 in 2.4 min, 2026-09-23).
+            # Reuse the shape the no_proxy lane already uses: read/write from OUR knob,
+            # connect tight at 30s so a dead peer still dies fast.
+            "timeout": LLMClient._no_proxy_timeout(),
         }
         base_url = str(target.get("base_url") or "")
         headers = dict(target.get("default_headers") or {})
@@ -1524,6 +1535,9 @@ class LLMClient:
             kwargs: Dict[str, Any] = {
                 "api_key": api_key,
                 "max_retries": 0,
+                # Same fix as _new_remote_client: the async lane carried the identical
+                # silent SDK-600s read default (see that comment for the failure).
+                "timeout": LLMClient._no_proxy_timeout(),
             }
             if base_url:
                 kwargs["base_url"] = base_url

@@ -38,6 +38,30 @@ from devtools.benchmarks.terminal_bench.control_plane_net import ensure_control_
 AGENT_IMPORT = "devtools.benchmarks.terminal_bench.harbor_installed_agent:OuroborosTerminalBenchAgent"
 
 
+def agent_knobs_snapshot() -> dict[str, Any]:
+    """Record the agent-tuning knobs that actually govern each turn.
+
+    Until 2026-09-23 the adapter's env whitelist lacked these keys, so every batch
+    silently ran the code defaults while the .env claimed 16384/4096/60 — a
+    "65536-era" and a "4096-era" batch are otherwise indistinguishable in the ledger.
+    Persisting the EFFECTIVE values (cap falls back to the code default 65536, with an
+    explicit source marker) makes the configuration boundary auditable per run.
+    """
+    raw_cap = (os.environ.get("OUROBOROS_MAIN_LOOP_MAX_TOKENS") or "").strip()
+    cap_is_env = raw_cap.isdigit()
+    return {
+        "OUROBOROS_MAIN_LOOP_MAX_TOKENS": int(raw_cap) if cap_is_env else 65536,
+        "main_loop_max_tokens_source": "env" if cap_is_env else "code_default",
+        "OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC": os.environ.get(
+            "OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC"
+        ),
+        "OUROBOROS_TRANSIENT_RETRY_MAX": os.environ.get("OUROBOROS_TRANSIENT_RETRY_MAX"),
+        "OUROBOROS_CONTEXT_MODE": os.environ.get("OUROBOROS_CONTEXT_MODE"),
+        "OUROBOROS_FALLBACK_CONTEXT_TOKENS": os.environ.get("OUROBOROS_FALLBACK_CONTEXT_TOKENS"),
+        "OUROBOROS_EFFORT_TASK": os.environ.get("OUROBOROS_EFFORT_TASK"),
+    }
+
+
 def harbor_command(
     *,
     task_names: list[str],
@@ -453,6 +477,9 @@ def main() -> int:
     }
     manifest["available_subagents"] = fixed_actor["available_subagents"]
     manifest["harness"]["fixed_model_actor"] = fixed_actor
+    # Which cap/timeout/retry/context this batch ran under (see agent_knobs_snapshot):
+    # without it two batches built on different knobs are indistinguishable.
+    manifest["agent_knobs"] = agent_knobs_snapshot()
     # Durable before Harbor can spend: no ambient settings model/Heavy can survive.
     write_json(manifest_path, manifest)
     if not actual_include_filters:

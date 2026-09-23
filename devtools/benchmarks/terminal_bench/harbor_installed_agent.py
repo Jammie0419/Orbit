@@ -736,6 +736,26 @@ class OuroborosTerminalBenchAgent(BaseInstalledAgent):
             "OUROBOROS_SOFT_TIMEOUT_SEC",
             "OUROBOROS_HARD_TIMEOUT_SEC",
             "OUROBOROS_TOOL_TIMEOUT_SEC",
+            # Agent tuning knobs: this whitelist is the ONLY path from the host .env
+            # into the agent container (no dotenv load in the container, _copy_clean_source
+            # strips every .env*, and the harbor command carries no --agent-env). Without
+            # these two keys the container silently ran the code defaults — a 65536-token
+            # single-turn cap at the endpoint's measured 8.8 tok/s needs ~2 hours and dies
+            # on the SDK's 600s read timeout (observed: 608s APITimeoutError), so every
+            # turn could burn 10+ minutes and 25/73 tasks ended deadline_local. The
+            # retries-forwarded counter is what "attempt 1/6" in the logs was telling us:
+            # the intended 1 was never in effect either.
+            "OUROBOROS_MAIN_LOOP_MAX_TOKENS",
+            "OUROBOROS_TRANSIENT_RETRY_MAX",
+            # Same class of latent trap: loop.py:2457 reads this with an inlined `or 80_000`,
+            # so until today the unwrapped .env value (80000) was harmlessly invisible —
+            # change it to anything else and it would silently keep the code default.
+            "OUROBOROS_FALLBACK_CONTEXT_TOKENS",
+            # Forwarded only since the llm.py root fix (2026-09-23): both remote client
+            # constructors now pass this value explicitly, so it finally governs the lane
+            # that used to sit on the openai SDK's silent 600s default. Keep >=1800 in the
+            # .env (it is also the worst-case generation budget for MAIN_LOOP_MAX_TOKENS).
+            "OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC",
         ]
         if allow_secrets:
             keys.extend(sorted(_SECRET_ENV_KEYS))
@@ -1595,6 +1615,7 @@ OURO_PIP_SHIM
             import pathlib
             import sys
             import time
+            import urllib.error
             import urllib.parse
             import urllib.request
 
@@ -1604,16 +1625,33 @@ OURO_PIP_SHIM
             stderr_log = pathlib.Path("/logs/agent/ouroboros-run.stderr.log")
             task_id_path = pathlib.Path("/logs/agent/ouroboros-current-task-id.txt")
 
-            def api(method, path, body=None, timeout=30):
+            def api(method, path, body=None, timeout=60, retries=3):
                 data = None
                 headers = {{"Accept": "application/json"}}
                 if body is not None:
                     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
                     headers["Content-Type"] = "application/json"
                 req = urllib.request.Request("{_SERVER_URL}" + path, data=data, headers=headers, method=method)
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    raw = resp.read().decode("utf-8", errors="replace")
-                return json.loads(raw) if raw.strip() else {{}}
+                # The supervisor loop can block for tens of seconds on a single step
+                # (watchdog logged STALLED ~94s on 2026-09-23; a usage-ledger lock wait
+                # alone is 45s). Every poll below used to get ONE 30s shot, so any poll
+                # issued during a stall died and took the whole trial with it (2/5 lost).
+                # GETs are retried with backoff — worst case ~186s of tolerance, and a
+                # healthy server answers in ms so the budget is never spent. POSTs are
+                # never replayed: a create that actually landed must not run twice.
+                attempts = retries if method == "GET" else 1
+                last_exc = None
+                for attempt in range(max(1, attempts)):
+                    if attempt:
+                        time.sleep(2 * attempt)
+                    try:
+                        with urllib.request.urlopen(req, timeout=timeout) as resp:
+                            raw = resp.read().decode("utf-8", errors="replace")
+                        return json.loads(raw) if raw.strip() else {{}}
+                    except (TimeoutError, urllib.error.URLError, ConnectionError) as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc
 
             def emit(event):
                 with run_log.open("a", encoding="utf-8") as f:
@@ -1646,7 +1684,7 @@ OURO_PIP_SHIM
             seen_events = set()
             final_statuses = {{"completed", "failed", "cancelled", "rejected_duplicate"}}
             while True:
-                result = api("GET", "/api/tasks/" + urllib.parse.quote(task_id), timeout=30)
+                result = api("GET", "/api/tasks/" + urllib.parse.quote(task_id), timeout=60)
                 for event in result.get("events") or []:
                     key = (str(event.get("type") or ""), str(event.get("ts") or event.get("seq") or ""))
                     if key in seen_events:
@@ -1814,7 +1852,7 @@ OURO_PIP_SHIM
             if not task_id:
                 raise SystemExit(0)
             try:
-                with urllib.request.urlopen("{_SERVER_URL}/api/tasks/" + urllib.parse.quote(task_id), timeout=10) as resp:
+                with urllib.request.urlopen("{_SERVER_URL}/api/tasks/" + urllib.parse.quote(task_id), timeout=30) as resp:
                     latest = json.loads(resp.read().decode("utf-8", errors="replace"))
             except Exception as exc:
                 pathlib.Path("/logs/agent/ouroboros-run.stderr.log").open("a", encoding="utf-8").write(
